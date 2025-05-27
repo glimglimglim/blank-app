@@ -8,9 +8,9 @@ Install dependencies:
 
 Run the app **from a terminal** with:
 
-    streamlit run streamlit_driver_license_extractor.py
+    streamlit run streamlit_driver_license_extractor_fixed.py
 
-Running it via plain `python streamlit_driver_license_extractor.py` will not spin‑up the Streamlit
+Running it via plain `python streamlit_driver_license_extractor_fixed.py` will not spin‑up the Streamlit
 server and will show *ScriptRunContext* warnings.
 """
 
@@ -152,38 +152,49 @@ st.markdown(
     "No data is stored server‑side."
 )
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Sidebar ‑ API key management
+# ──────────────────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.header("🔑 OpenAI API Key")
 
-    # Automatically use the key from secrets or environment variable, no manual input
-    try:
-        openai.api_key = st.secrets["OPENAI_API_KEY"]
-    except Exception:
-        openai.api_key = os.getenv("OPENAI_API_KEY", "")
+    # Try environment / Streamlit secrets first.
+    openai.api_key = os.getenv("OPENAI_API_KEY", st.secrets.get("OPENAI_API_KEY", ""))
+
+    # Fallback: allow the user to paste their key (kept in session_state only).
+    if not openai.api_key:
+        api_key_input = st.text_input(
+            "Enter your OpenAI API key",
+            type="password",
+            placeholder="sk‑...",
+        )
+        if api_key_input:
+            openai.api_key = api_key_input
+    else:
+        st.success("API key loaded from environment / secrets.")
 
     if not openai.api_key:
-        st.warning("⚠️ No OpenAI API key found in environment or Streamlit secrets.")
-    
+        st.warning("⚠️ No OpenAI API key provided. Enter one above to proceed.")
+
     st.markdown(
         "---\n⚠️ **Privacy reminder:** ensure you are authorised to process any personal data you upload."
     )
 
-
+# File uploader
 uploaded_file = st.file_uploader(
     "Choose an image or PDF of a driver's license",
     type=["pdf", "png", "jpg", "jpeg", "tiff", "tif"],
 )
 
-# A small stateful flag so the preview checkbox only shows after a successful run.
-show_images = st.session_state.get("show_images", False)
-
-if uploaded_file and (openai.api_key or api_key_input):
+# Guard‑rail: only continue if we have both a file *and* an API key.
+if uploaded_file and openai.api_key:
     if st.button("🚀 Extract License Data", type="primary"):
         suffix = Path(uploaded_file.name).suffix
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             tmp.write(uploaded_file.getbuffer())
             tmp_path = Path(tmp.name)
 
+        # Prepare input images (and keep PIL images for preview).
         with st.spinner("Converting file …"):
             try:
                 b64_chunks = file_to_base64_chunks(tmp_path)
@@ -192,6 +203,7 @@ if uploaded_file and (openai.api_key or api_key_input):
                 st.error(f"Error processing file: {e}")
                 st.stop()
 
+        # Call the OpenAI API.
         with st.spinner(f"Sending {len(b64_chunks)} page(s)/image(s) to GPT‑4o‑mini …"):
             try:
                 dl_json = gpt4o_dl_from_images(b64_chunks)
@@ -201,7 +213,7 @@ if uploaded_file and (openai.api_key or api_key_input):
 
         st.success("Extraction complete!")
 
-        # Side‑by‑side layout
+        # Side‑by‑side layout for images and results.
         col1, col2 = st.columns(2)
 
         with col1:
@@ -247,10 +259,21 @@ if uploaded_file and (openai.api_key or api_key_input):
                 sex = st.text_input("Sex", dl_json.get("sex", ""))
                 eye = st.text_input("Eye Color", dl_json.get("eye_color", ""))
                 height = st.text_input("Height", dl_json.get("height", ""))
-                organ = st.selectbox("Organ Donor", ["", "Yes", "No"], index=["", "Yes", "No"].index(dl_json.get("organ_donor", "")))
+                organ_default = dl_json.get("organ_donor", "")
+                organ = st.selectbox(
+                    "Organ Donor",
+                    ["", "Yes", "No"],
+                    index=["", "Yes", "No"].index(organ_default if organ_default in ["", "Yes", "No"] else ""),
+                )
 
                 submitted = st.form_submit_button("✅ Save / Update")
                 if submitted:
                     st.success("Form submitted (not persisted in this demo).")
 
             st.caption("All form data remains in the browser session and is **not** transmitted.")
+
+# If the user has not provided the required inputs, give gentle guidance.
+elif uploaded_file and not openai.api_key:
+    st.info("Please provide an OpenAI API key in the sidebar to proceed.")
+else:
+    st.write("👈 Upload a file and provide an API key to get started.")
