@@ -154,25 +154,20 @@ st.markdown(
 
 with st.sidebar:
     st.header("🔑 OpenAI API Key")
-    # Attempt to read a default key from secrets.toml *or* env‑var.
-    try:
-        default_key = st.secrets["OPENAI_API_KEY"]
-    except Exception:
-        default_key = os.getenv("OPENAI_API_KEY", "")
 
-    api_key_input = st.text_input(
-        "Enter your OpenAI API key",
-        value=default_key,
-        type="password",
-        placeholder="sk‑…",
+    # Automatically use the key from secrets or environment variable, no manual input
+    try:
+        openai.api_key = st.secrets["OPENAI_API_KEY"]
+    except Exception:
+        openai.api_key = os.getenv("OPENAI_API_KEY", "")
+
+    if not openai.api_key:
+        st.warning("⚠️ No OpenAI API key found in environment or Streamlit secrets.")
+    
+    st.markdown(
+        "---\n⚠️ **Privacy reminder:** ensure you are authorised to process any personal data you upload."
     )
 
-    if api_key_input:
-        openai.api_key = api_key_input
-    elif os.getenv("OPENAI_API_KEY"):
-        openai.api_key = os.getenv("OPENAI_API_KEY")
-
-    st.markdown(
         "---\n⚠️ **Privacy reminder:** ensure you are authorised to process any personal data you upload."
     )
 
