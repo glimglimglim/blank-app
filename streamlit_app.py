@@ -168,8 +168,6 @@ with st.sidebar:
         "---\n⚠️ **Privacy reminder:** ensure you are authorised to process any personal data you upload."
     )
 
-        "---\n⚠️ **Privacy reminder:** ensure you are authorised to process any personal data you upload."
-    )
 
 uploaded_file = st.file_uploader(
     "Choose an image or PDF of a driver's license",
