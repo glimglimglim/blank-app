@@ -52,7 +52,6 @@ SYSTEM_PROMPT = (
 with st.sidebar:
     st.header("🔑 API Keys & Clients")
 
-    # OpenAI
     openai.api_key = os.getenv("OPENAI_API_KEY", st.secrets.get("OPENAI_API_KEY", ""))
     if not openai.api_key:
         k = st.text_input("OpenAI API key", type="password", placeholder="sk-...")
@@ -61,7 +60,6 @@ with st.sidebar:
     else:
         st.success("OpenAI key loaded.")
 
-    # Gemini
     gemini_key = os.getenv("GEMINI_API_KEY", st.secrets.get("GEMINI_API_KEY", ""))
     if not gemini_key:
         gemini_key = st.text_input(
@@ -74,7 +72,6 @@ with st.sidebar:
         client = genai.Client(api_key=gemini_key)
         st.success("Gemini client initialized.")
 
-    # AWS Textract
     try:
         aws_cfg = st.secrets["aws"]
         textract = boto3.client(
@@ -121,12 +118,23 @@ def render_fields_grid(container, title: str, data: dict, num_cols: int = 3):
     for idx, field in enumerate(DL_FIELDS):
         col = cols[idx % num_cols]
         label = field.replace("_", " ").title()
-        raw_value = data.get(field, "") or ""
-        styled_value = (
-            f'<span style="background-color:#f8f9fa; padding:4px 8px; border-radius:4px; color:#111;">'
-            f'{raw_value}</span>'
-        )
-        col.markdown(f"**{label}:** {styled_value}", unsafe_allow_html=True)
+        value = data.get(field, "") or ""
+        col.markdown(f"""
+            <div style="display:flex; flex-direction:column; gap:4px;">
+                <div style="font-weight:bold;">{label}</div>
+                <div style="
+                    background-color:#f8f9fa;
+                    padding:8px;
+                    border-radius:6px;
+                    color:#111;
+                    min-height:38px;
+                    font-family:monospace;
+                    font-size:0.95em;
+                    word-wrap:break-word;
+                    border: 1px solid #ddd;
+                ">{value}</div>
+            </div>
+        """, unsafe_allow_html=True)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Model Invocation Functions
