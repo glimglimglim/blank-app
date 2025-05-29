@@ -10,6 +10,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import List
 
+import boto3
 import openai
 import streamlit as st
 from PIL import Image
@@ -45,11 +46,11 @@ SYSTEM_PROMPT = (
 )
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Sidebar — API Key Management
+# Sidebar — API Key & Client Initialization
 # ──────────────────────────────────────────────────────────────────────────────
 
 with st.sidebar:
-    st.header("🔑 API Keys")
+    st.header("🔑 API Keys & Clients")
 
     # OpenAI key
     openai.api_key = os.getenv("OPENAI_API_KEY", st.secrets.get("OPENAI_API_KEY", ""))
@@ -72,6 +73,20 @@ with st.sidebar:
     if gemini_key:
         client = genai.Client(api_key=gemini_key)
         st.success("Gemini client initialized.")
+
+    # AWS credentials & Textract client from secrets.toml
+    try:
+        aws_cfg = st.secrets["aws"]
+        textract = boto3.client(
+            "textract",
+            aws_access_key_id=aws_cfg["aws_access_key_id"],
+            aws_secret_access_key=aws_cfg["aws_secret_access_key"],
+            aws_session_token=aws_cfg["aws_session_token"],
+            region_name=aws_cfg.get("region_name", "us-east-1"),
+        )
+        st.success("AWS Textract client initialized.")
+    except Exception:
+        st.error("Make sure you have an [aws] section in .streamlit/secrets.toml")
 
     st.markdown(
         "---\n"
@@ -129,12 +144,10 @@ def gpt4o_dl_from_images(b64_images: List[str]) -> dict:
     return json.loads(resp.choices[0].message.content)
 
 def gemini_dl_from_images(b64_images: List[str]) -> dict:
-    # Prepare inline image parts
     image_parts = [
         types.Part.from_bytes(data=base64.b64decode(b64), mime_type="image/png")
         for b64 in b64_images
     ]
-
     response = client.models.generate_content(
         model="gemini-2.0-flash",
         config=types.GenerateContentConfig(
@@ -147,6 +160,76 @@ def gemini_dl_from_images(b64_images: List[str]) -> dict:
     )
     return json.loads(response.text)
 
+def textract_dl_from_images(path: Path) -> dict:
+    """
+    Extracts key-value pairs from driver's license images using AWS Textract.
+    Returns a dict with exactly the DL_FIELDS keys.
+    """
+    # FIELD_KEYWORDS mapping omitted for brevity; same as before
+    FIELD_KEYWORDS = {
+        "license_number": ["license", "lic no", "dl number"],
+        "class": ["class"],
+        "first_name": ["first name", "given name"],
+        "middle_name": ["middle name"],
+        "last_name": ["last name", "surname"],
+        "address": ["address"],
+        "city": ["city"],
+        "state": ["state"],
+        "zip": ["zip", "postal code"],
+        "date_of_birth": ["date of birth", "dob"],
+        "issue_date": ["date of issue", "issue date"],
+        "expiration_date": ["expiration date", "exp date", "exp"],
+        "sex": ["sex", "gender"],
+        "eye_color": ["eye color", "eyes"],
+        "height": ["height"],
+        "organ_donor": ["organ donor"],
+    }
+    results = {k: "" for k in DL_FIELDS}
+
+    images = _file_to_images(path)
+    for img in images:
+        buf = io.BytesIO()
+        img.convert("RGB").save(buf, format="PNG")
+        resp = textract.analyze_document(Document={'Bytes': buf.getvalue()}, FeatureTypes=['FORMS'])
+        blocks = resp.get('Blocks', [])
+
+        # Build block maps
+        block_map = {b['Id']: b for b in blocks}
+        key_map = {b['Id']: b for b in blocks if b['BlockType']=='KEY_VALUE_SET' and 'KEY' in b.get('EntityTypes', [])}
+        value_map = {b['Id']: b for b in blocks if b['BlockType']=='KEY_VALUE_SET' and 'VALUE' in b.get('EntityTypes', [])}
+
+        def get_text(block):
+            text = ""
+            for rel in block.get('Relationships', []):
+                if rel['Type']=='CHILD':
+                    for cid in rel['Ids']:
+                        word = block_map.get(cid)
+                        if word and word['BlockType']=='WORD':
+                            text += word['Text'] + ' '
+            return text.strip()
+
+        # Extract key-values
+        kvs: dict[str, str] = {}
+        for key_id, key_block in key_map.items():
+            key_text = get_text(key_block).lower()
+            val_text = ""
+            for rel in key_block.get('Relationships', []):
+                if rel['Type']=='VALUE':
+                    for vid in rel['Ids']:
+                        val_block = value_map.get(vid)
+                        if val_block:
+                            val_text = get_text(val_block)
+            kvs[key_text] = val_text
+
+        # Map to DL_FIELDS
+        for field, keywords in FIELD_KEYWORDS.items():
+            for key_text, val_text in kvs.items():
+                if any(keyword in key_text for keyword in keywords):
+                    results[field] = val_text
+                    break
+
+    return results
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Streamlit UI
 # ──────────────────────────────────────────────────────────────────────────────
@@ -157,7 +240,7 @@ uploaded_file = st.file_uploader(
 )
 
 if uploaded_file and openai.api_key and gemini_key:
-    if st.button("🚀 Extract with GPT-4o & Gemini", type="primary"):
+    if st.button("🚀 Extract with GPT-4o, Gemini & AWS Textract", type="primary"):
         suffix = Path(uploaded_file.name).suffix
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             tmp.write(uploaded_file.getbuffer())
@@ -185,9 +268,16 @@ if uploaded_file and openai.api_key and gemini_key:
                 st.error(f"Gemini API error: {e}")
                 dl_gemini = {k: "" for k in DL_FIELDS}
 
+        with st.spinner("Extracting with AWS Textract …"):
+            try:
+                dl_textract = textract_dl_from_images(tmp_path)
+            except Exception as e:
+                st.error(f"AWS Textract error: {e}")
+                dl_textract = {k: "" for k in DL_FIELDS}
+
         st.success("Extraction complete!")
 
-        col_img, col_oai, col_gem = st.columns(3)
+        col_img, col_oai, col_gem, col_tex = st.columns(4)
 
         with col_img:
             st.subheader("🖼️ Converted Image(s)")
@@ -214,7 +304,17 @@ if uploaded_file and openai.api_key and gemini_key:
                 mime="application/json",
             )
 
+        with col_tex:
+            st.subheader("🧾 AWS Textract JSON")
+            st.json(dl_textract, expanded=True)
+            st.download_button(
+                "💾 Download AWS Textract JSON",
+                data=json.dumps(dl_textract, indent=2),
+                file_name=f"{Path(uploaded_file.name).stem}_textract.json",
+                mime="application/json",
+            )
+
 elif uploaded_file:
-    st.info("Please provide both OpenAI and Gemini API keys in the sidebar to proceed.")
+    st.info("Please provide OpenAI, Gemini, and AWS credentials to proceed.")
 else:
     st.write("👈 Upload a file and provide API keys to get started.")
