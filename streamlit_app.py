@@ -115,29 +115,23 @@ def _pil_to_base64(img: Image.Image) -> str:
 def file_to_base64_chunks(path: Path) -> List[str]:
     return [_pil_to_base64(im.convert("RGB")) for im in _file_to_images(path)]
 
-def render_fields_grid(container, title: str, data: dict):
-    """Display fields in a two-column grid within the given container with styled backgrounds."""
+def render_fields_grid(container, title: str, data: dict, num_cols: int = 3):
+    """
+    Display fields in a multi-column grid within the given container.
+    Field values get a light background and black text to look like filled-in fields.
+    """
     container.subheader(title)
-    # Split list of fields in half
-    mid = (len(DL_FIELDS) + 1) // 2
-    left_fields = DL_FIELDS[:mid]
-    right_fields = DL_FIELDS[mid:]
-    # Create two columns
-    col1, col2 = container.columns(2)
-    # Render left half
-    with col1:
-        for field in left_fields:
-            label = field.replace("_", " ").title()
-            value = data.get(field, "") or "—"
-            styled_value = f"<span style='background-color:#f0f2f6; padding:2px 4px; border-radius:3px;'>{value}</span>"
-            container.markdown(f"**{label}:** {styled_value}", unsafe_allow_html=True)
-    # Render right half
-    with col2:
-        for field in right_fields:
-            label = field.replace("_", " ").title()
-            value = data.get(field, "") or "—"
-            styled_value = f"<span style='background-color:#f0f2f6; padding:2px 4px; border-radius:3px;'>{value}</span>"
-            container.markdown(f"**{label}:** {styled_value}", unsafe_allow_html=True)
+    cols = container.columns(num_cols)
+    for idx, field in enumerate(DL_FIELDS):
+        col = cols[idx % num_cols]
+        label = field.replace("_", " ").title()
+        raw_value = data.get(field, "") or ""
+        styled_value = (
+            f'<span style="background-color:#f0f0f0; '
+            f'padding:4px 8px; border-radius:4px; color:#000;">'
+            f'{raw_value}</span>'
+        )
+        col.markdown(f"**{label}:** {styled_value}", unsafe_allow_html=True)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Model Invocation Functions
@@ -306,7 +300,7 @@ if uploaded_file and openai.api_key and gemini_key:
 
         st.success("Extraction complete!")
 
-        # two columns: image on left, model outputs on right in tabs
+        # image on left, model outputs on right in tabs
         col_img, col_models = st.columns([1, 2], gap="large")
 
         with col_img:
