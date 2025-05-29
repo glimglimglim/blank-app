@@ -115,15 +115,27 @@ def _pil_to_base64(img: Image.Image) -> str:
 def file_to_base64_chunks(path: Path) -> List[str]:
     return [_pil_to_base64(im.convert("RGB")) for im in _file_to_images(path)]
 
-def render_fields(container, title: str, data: dict):
-    """Display each DL_FIELD in a neat two-column layout under a given container."""
+def render_fields_grid(container, title: str, data: dict):
+    """Display fields in a two-column grid within the given container."""
     container.subheader(title)
-    for field in DL_FIELDS:
-        label = field.replace("_", " ").title()
-        value = data.get(field, "") or "—"
-        a, b = container.columns([1, 3])
-        a.markdown(f"**{label}**")
-        b.markdown(value)
+    # Split list of fields in half
+    mid = (len(DL_FIELDS) + 1) // 2
+    left_fields = DL_FIELDS[:mid]
+    right_fields = DL_FIELDS[mid:]
+    # Create two columns
+    col1, col2 = container.columns(2)
+    # Render left half
+    with col1:
+        for field in left_fields:
+            label = field.replace("_", " ").title()
+            value = data.get(field, "") or "—"
+            st.markdown(f"**{label}:** {value}")
+    # Render right half
+    with col2:
+        for field in right_fields:
+            label = field.replace("_", " ").title()
+            value = data.get(field, "") or "—"
+            st.markdown(f"**{label}:** {value}")
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Model Invocation Functions
@@ -308,7 +320,7 @@ if uploaded_file and openai.api_key and gemini_key:
                 [dl_openai, dl_gemini, dl_textract],
             ):
                 with tab:
-                    render_fields(tab, title, data)
+                    render_fields_grid(tab, title, data)
 
 elif uploaded_file:
     st.info("Please provide OpenAI, Gemini, and AWS credentials to proceed.")
