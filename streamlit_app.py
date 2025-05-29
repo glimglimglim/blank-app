@@ -115,6 +115,16 @@ def _pil_to_base64(img: Image.Image) -> str:
 def file_to_base64_chunks(path: Path) -> List[str]:
     return [_pil_to_base64(im.convert("RGB")) for im in _file_to_images(path)]
 
+def render_fields(container, title: str, data: dict):
+    """Display each DL_FIELD in a neat two-column layout under a given container."""
+    container.subheader(title)
+    for field in DL_FIELDS:
+        label = field.replace("_", " ").title()
+        value = data.get(field, "") or "—"
+        a, b = container.columns([1, 3])
+        a.markdown(f"**{label}**")
+        b.markdown(value)
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Model Invocation Functions
 # ──────────────────────────────────────────────────────────────────────────────
@@ -165,7 +175,6 @@ def textract_dl_from_images(path: Path) -> dict:
     Extracts key-value pairs from driver's license images using AWS Textract.
     Returns a dict with exactly the DL_FIELDS keys.
     """
-    # FIELD_KEYWORDS mapping omitted for brevity; same as before
     FIELD_KEYWORDS = {
         "license_number": ["license", "lic no", "dl number"],
         "class": ["class"],
@@ -195,8 +204,14 @@ def textract_dl_from_images(path: Path) -> dict:
 
         # Build block maps
         block_map = {b['Id']: b for b in blocks}
-        key_map = {b['Id']: b for b in blocks if b['BlockType']=='KEY_VALUE_SET' and 'KEY' in b.get('EntityTypes', [])}
-        value_map = {b['Id']: b for b in blocks if b['BlockType']=='KEY_VALUE_SET' and 'VALUE' in b.get('EntityTypes', [])}
+        key_map = {
+            b['Id']: b for b in blocks
+            if b['BlockType']=='KEY_VALUE_SET' and 'KEY' in b.get('EntityTypes', [])
+        }
+        value_map = {
+            b['Id']: b for b in blocks
+            if b['BlockType']=='KEY_VALUE_SET' and 'VALUE' in b.get('EntityTypes', [])
+        }
 
         def get_text(block):
             text = ""
@@ -275,26 +290,25 @@ if uploaded_file and openai.api_key and gemini_key:
                 st.error(f"AWS Textract error: {e}")
                 dl_textract = {k: "" for k in DL_FIELDS}
 
-    st.success("Extraction complete!")
+        st.success("Extraction complete!")
 
-    # show image on the left, all models on the right in a row of tabs
-    col_img, col_models = st.columns([1, 2], gap="large")
+        # two columns: image on left, model outputs on right in tabs
+        col_img, col_models = st.columns([1, 2], gap="large")
 
-    with col_img:
-        st.subheader("🖼️ Converted Image(s)")
-        for idx, img in enumerate(images, start=1):
-            st.image(img, caption=f"Page {idx}", use_container_width=True)
+        with col_img:
+            st.subheader("🖼️ Converted Image(s)")
+            for idx, img in enumerate(images, start=1):
+                st.image(img, caption=f"Page {idx}", use_container_width=True)
 
-    with col_models:
-        tabs = st.tabs(["🤖 OpenAI", "🤖 Gemini", "🧾 Textract"])
-        for tab, model_name, data in zip(
-            tabs,
-            ["GPT-4o-mini Fields", "Gemini Fields", "Textract Fields"],
-            [dl_openai, dl_gemini, dl_textract],
-        ):
-            with tab:
-                render_fields(st, model_name, data)
-
+        with col_models:
+            tabs = st.tabs(["🤖 OpenAI", "🤖 Gemini", "🧾 Textract"])
+            for tab, title, data in zip(
+                tabs,
+                ["GPT-4o-mini Fields", "Gemini Fields", "Textract Fields"],
+                [dl_openai, dl_gemini, dl_textract],
+            ):
+                with tab:
+                    render_fields(tab, title, data)
 
 elif uploaded_file:
     st.info("Please provide OpenAI, Gemini, and AWS credentials to proceed.")
