@@ -2,4 +2,4 @@ streamlit>=1.32
 openai>=1.25
 pillow>=10.0
 pdf2image>=1.17
-google-generativeai
+google-genai
