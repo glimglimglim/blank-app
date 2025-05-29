@@ -21,7 +21,8 @@ except ImportError:
     convert_from_path = None
 
 # Import and configure Google's Gemini
-import google.generativeai as genai
+from google import genai
+
 
 # Configure API keys
 st.set_page_config(page_title="Driver‑License Extractor", layout="centered")
