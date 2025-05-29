@@ -275,33 +275,25 @@ if uploaded_file and openai.api_key and gemini_key:
                 st.error(f"AWS Textract error: {e}")
                 dl_textract = {k: "" for k in DL_FIELDS}
 
-        st.success("Extraction complete!")
+    st.success("Extraction complete!")
 
-    col_img, col_oai, col_gem, col_tex = st.columns(4)
+    # show image on the left, all models on the right in a row of tabs
+    col_img, col_models = st.columns([1, 2], gap="large")
 
     with col_img:
         st.subheader("🖼️ Converted Image(s)")
         for idx, img in enumerate(images, start=1):
             st.image(img, caption=f"Page {idx}", use_container_width=True)
 
-    def render_fields(container, title, data: dict):
-        container.subheader(title)
-        for field in DL_FIELDS:
-            label = field.replace("_", " ").title()
-            value = data.get(field, "")
-            # two-col layout per field
-            a, b = container.columns([1,3])
-            a.markdown(f"**{label}**")
-            b.markdown(value or "—")
-
-    with col_oai:
-        render_fields(st, "🤖 OpenAI Fields", dl_openai)
-
-    with col_gem:
-        render_fields(st, "🤖 Gemini Fields", dl_gemini)
-
-    with col_tex:
-        render_fields(st, "🧾 Textract Fields", dl_textract)
+    with col_models:
+        tabs = st.tabs(["🤖 OpenAI", "🤖 Gemini", "🧾 Textract"])
+        for tab, model_name, data in zip(
+            tabs,
+            ["GPT-4o-mini Fields", "Gemini Fields", "Textract Fields"],
+            [dl_openai, dl_gemini, dl_textract],
+        ):
+            with tab:
+                render_fields(st, model_name, data)
 
 
 elif uploaded_file:
