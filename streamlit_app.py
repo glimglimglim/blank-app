@@ -52,7 +52,7 @@ SYSTEM_PROMPT = (
 with st.sidebar:
     st.header("🔑 API Keys & Clients")
 
-    # OpenAI key
+    # OpenAI
     openai.api_key = os.getenv("OPENAI_API_KEY", st.secrets.get("OPENAI_API_KEY", ""))
     if not openai.api_key:
         k = st.text_input("OpenAI API key", type="password", placeholder="sk-...")
@@ -61,7 +61,7 @@ with st.sidebar:
     else:
         st.success("OpenAI key loaded.")
 
-    # Gemini key & client
+    # Gemini
     gemini_key = os.getenv("GEMINI_API_KEY", st.secrets.get("GEMINI_API_KEY", ""))
     if not gemini_key:
         gemini_key = st.text_input(
@@ -74,7 +74,7 @@ with st.sidebar:
         client = genai.Client(api_key=gemini_key)
         st.success("Gemini client initialized.")
 
-    # AWS credentials & Textract client from secrets.toml
+    # AWS Textract
     try:
         aws_cfg = st.secrets["aws"]
         textract = boto3.client(
@@ -116,10 +116,6 @@ def file_to_base64_chunks(path: Path) -> List[str]:
     return [_pil_to_base64(im.convert("RGB")) for im in _file_to_images(path)]
 
 def render_fields_grid(container, title: str, data: dict, num_cols: int = 3):
-    """
-    Display fields in a multi-column grid within the given container.
-    Field values get a light background and black text to look like filled-in fields.
-    """
     container.subheader(title)
     cols = container.columns(num_cols)
     for idx, field in enumerate(DL_FIELDS):
@@ -127,8 +123,7 @@ def render_fields_grid(container, title: str, data: dict, num_cols: int = 3):
         label = field.replace("_", " ").title()
         raw_value = data.get(field, "") or ""
         styled_value = (
-            f'<span style="background-color:#f0f0f0; '
-            f'padding:4px 8px; border-radius:4px; color:#000;">'
+            f'<span style="background-color:#f8f9fa; padding:4px 8px; border-radius:4px; color:#111;">'
             f'{raw_value}</span>'
         )
         col.markdown(f"**{label}:** {styled_value}", unsafe_allow_html=True)
@@ -179,10 +174,6 @@ def gemini_dl_from_images(b64_images: List[str]) -> dict:
     return json.loads(response.text)
 
 def textract_dl_from_images(path: Path) -> dict:
-    """
-    Extracts key-value pairs from driver's license images using AWS Textract.
-    Returns a dict with exactly the DL_FIELDS keys.
-    """
     FIELD_KEYWORDS = {
         "license_number": ["license", "lic no", "dl number"],
         "class": ["class"],
@@ -210,16 +201,9 @@ def textract_dl_from_images(path: Path) -> dict:
         resp = textract.analyze_document(Document={'Bytes': buf.getvalue()}, FeatureTypes=['FORMS'])
         blocks = resp.get('Blocks', [])
 
-        # Build block maps
         block_map = {b['Id']: b for b in blocks}
-        key_map = {
-            b['Id']: b for b in blocks
-            if b['BlockType']=='KEY_VALUE_SET' and 'KEY' in b.get('EntityTypes', [])
-        }
-        value_map = {
-            b['Id']: b for b in blocks
-            if b['BlockType']=='KEY_VALUE_SET' and 'VALUE' in b.get('EntityTypes', [])
-        }
+        key_map = {b['Id']: b for b in blocks if b['BlockType']=='KEY_VALUE_SET' and 'KEY' in b.get('EntityTypes', [])}
+        value_map = {b['Id']: b for b in blocks if b['BlockType']=='KEY_VALUE_SET' and 'VALUE' in b.get('EntityTypes', [])}
 
         def get_text(block):
             text = ""
@@ -231,7 +215,6 @@ def textract_dl_from_images(path: Path) -> dict:
                             text += word['Text'] + ' '
             return text.strip()
 
-        # Extract key-values
         kvs: dict[str, str] = {}
         for key_id, key_block in key_map.items():
             key_text = get_text(key_block).lower()
@@ -244,7 +227,6 @@ def textract_dl_from_images(path: Path) -> dict:
                             val_text = get_text(val_block)
             kvs[key_text] = val_text
 
-        # Map to DL_FIELDS
         for field, keywords in FIELD_KEYWORDS.items():
             for key_text, val_text in kvs.items():
                 if any(keyword in key_text for keyword in keywords):
@@ -300,7 +282,6 @@ if uploaded_file and openai.api_key and gemini_key:
 
         st.success("Extraction complete!")
 
-        # image on left, model outputs on right in tabs
         col_img, col_models = st.columns([1, 2], gap="large")
 
         with col_img:
