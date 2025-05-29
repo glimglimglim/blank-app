@@ -277,42 +277,32 @@ if uploaded_file and openai.api_key and gemini_key:
 
         st.success("Extraction complete!")
 
-        col_img, col_oai, col_gem, col_tex = st.columns(4)
+    col_img, col_oai, col_gem, col_tex = st.columns(4)
 
-        with col_img:
-            st.subheader("🖼️ Converted Image(s)")
-            for idx, img in enumerate(images, start=1):
-                st.image(img, caption=f"Page {idx}", use_container_width=True)
+    with col_img:
+        st.subheader("🖼️ Converted Image(s)")
+        for idx, img in enumerate(images, start=1):
+            st.image(img, caption=f"Page {idx}", use_container_width=True)
 
-        with col_oai:
-            st.subheader("🤖 GPT-4o-mini JSON")
-            st.json(dl_openai, expanded=True)
-            st.download_button(
-                "💾 Download GPT-4o JSON",
-                data=json.dumps(dl_openai, indent=2),
-                file_name=f"{Path(uploaded_file.name).stem}_gpt4o.json",
-                mime="application/json",
-            )
+    def render_fields(container, title, data: dict):
+        container.subheader(title)
+        for field in DL_FIELDS:
+            label = field.replace("_", " ").title()
+            value = data.get(field, "")
+            # two-col layout per field
+            a, b = container.columns([1,3])
+            a.markdown(f"**{label}**")
+            b.markdown(value or "—")
 
-        with col_gem:
-            st.subheader("🤖 Gemini JSON")
-            st.json(dl_gemini, expanded=True)
-            st.download_button(
-                "💾 Download Gemini JSON",
-                data=json.dumps(dl_gemini, indent=2),
-                file_name=f"{Path(uploaded_file.name).stem}_gemini.json",
-                mime="application/json",
-            )
+    with col_oai:
+        render_fields(st, "🤖 OpenAI Fields", dl_openai)
 
-        with col_tex:
-            st.subheader("🧾 AWS Textract JSON")
-            st.json(dl_textract, expanded=True)
-            st.download_button(
-                "💾 Download AWS Textract JSON",
-                data=json.dumps(dl_textract, indent=2),
-                file_name=f"{Path(uploaded_file.name).stem}_textract.json",
-                mime="application/json",
-            )
+    with col_gem:
+        render_fields(st, "🤖 Gemini Fields", dl_gemini)
+
+    with col_tex:
+        render_fields(st, "🧾 Textract Fields", dl_textract)
+
 
 elif uploaded_file:
     st.info("Please provide OpenAI, Gemini, and AWS credentials to proceed.")
