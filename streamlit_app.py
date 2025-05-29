@@ -34,7 +34,7 @@ st.title("🪪 ➜ 📋  Driver-License Data Extractor")
 DL_FIELDS = [
     "license_number", "class", "first_name", "middle_name", "last_name",
     "address", "city", "state", "zip", "date_of_birth", "issue_date",
-    "expiration_date", "sex", "eye_color", "height", "organ_donor",
+    "expiration_date", "sex", "eye_color", "hair", "height", "organ_donor", "weight"
 ]
 
 SYSTEM_PROMPT = (
@@ -116,7 +116,7 @@ def file_to_base64_chunks(path: Path) -> List[str]:
     return [_pil_to_base64(im.convert("RGB")) for im in _file_to_images(path)]
 
 def render_fields_grid(container, title: str, data: dict):
-    """Display fields in a two-column grid within the given container."""
+    """Display fields in a two-column grid within the given container with styled backgrounds."""
     container.subheader(title)
     # Split list of fields in half
     mid = (len(DL_FIELDS) + 1) // 2
@@ -129,13 +129,15 @@ def render_fields_grid(container, title: str, data: dict):
         for field in left_fields:
             label = field.replace("_", " ").title()
             value = data.get(field, "") or "—"
-            st.markdown(f"**{label}:** {value}")
+            styled_value = f"<span style='background-color:#f0f2f6; padding:2px 4px; border-radius:3px;'>{value}</span>"
+            container.markdown(f"**{label}:** {styled_value}", unsafe_allow_html=True)
     # Render right half
     with col2:
         for field in right_fields:
             label = field.replace("_", " ").title()
             value = data.get(field, "") or "—"
-            st.markdown(f"**{label}:** {value}")
+            styled_value = f"<span style='background-color:#f0f2f6; padding:2px 4px; border-radius:3px;'>{value}</span>"
+            container.markdown(f"**{label}:** {styled_value}", unsafe_allow_html=True)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Model Invocation Functions
@@ -316,7 +318,7 @@ if uploaded_file and openai.api_key and gemini_key:
             tabs = st.tabs(["🤖 OpenAI", "🤖 Gemini", "🧾 Textract"])
             for tab, title, data in zip(
                 tabs,
-                ["GPT-4o-mini Fields", "Gemini Fields", "Textract Fields"],
+                ["GPT-4o-mini Fields", "Gemini 2.0 Flash Fields", "Textract Fields"],
                 [dl_openai, dl_gemini, dl_textract],
             ):
                 with tab:
