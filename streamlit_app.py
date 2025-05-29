@@ -1,19 +1,3 @@
-"""
-Streamlit app to extract structured JSON from U.S. driver's‑license images and preview a pre‑filled form.
-
-Install dependencies:
-    pip install streamlit openai pillow pdf2image
-
-`pdf2image` requires the Poppler utilities (https://poppler.freedesktop.org) on your PATH.
-
-Run the app **from a terminal** with:
-
-    streamlit run streamlit_driver_license_extractor_fixed.py
-
-Running it via plain `python streamlit_driver_license_extractor_fixed.py` will not spin‑up the Streamlit
-server and will show *ScriptRunContext* warnings.
-"""
-
 from __future__ import annotations
 
 import base64
@@ -30,97 +14,89 @@ import openai
 import streamlit as st
 from PIL import Image
 
+# Optional PDF support
 try:
     from pdf2image import convert_from_path
-except ImportError:  # Optional dependency.
+except ImportError:
     convert_from_path = None
 
-###############################################################################
-# Configuration
-###############################################################################
+# Import and configure Google's Gemini
+import google.generativeai as genai
 
-# The JSON schema we expect back from the model.
+# Configure API keys
+st.set_page_config(page_title="Driver‑License Extractor", layout="centered")
+st.title("🪪 ➜ 📋  Driver‑License Data Extractor")
+
+with st.sidebar:
+    st.header("🔑 API Keys")
+    # OpenAI key
+    openai.api_key = os.getenv("OPENAI_API_KEY", st.secrets.get("OPENAI_API_KEY", ""))
+    if not openai.api_key:
+        api_key_in = st.text_input("OpenAI API key", type="password", placeholder="sk-...")
+        if api_key_in:
+            openai.api_key = api_key_in
+    else:
+        st.success("OpenAI key loaded.")
+
+    # Gemini key
+    gemini_key = os.getenv("GEMINI_API_KEY", st.secrets.get("GEMINI_API_KEY", ""))
+    if gemini_key:
+        genai.configure(api_key=gemini_key)
+        st.success("Gemini key loaded.")
+    else:
+        gemini_key = st.text_input("Gemini API key", type="password", placeholder="...", help="Required for Gemini extraction")
+        if gemini_key:
+            genai.configure(api_key=gemini_key)
+
+    st.markdown("---\n⚠️ **Privacy reminder:** ensure you are authorised to process any personal data you upload.")
+
+# Expected JSON fields
 DL_FIELDS = [
-    "license_number",
-    "class",
-    "first_name",
-    "middle_name",
-    "last_name",
-    "address",
-    "city",
-    "state",
-    "zip",
-    "date_of_birth",
-    "issue_date",
-    "expiration_date",
-    "sex",
-    "eye_color",
-    "height",
-    "organ_donor",
+    "license_number","class","first_name","middle_name","last_name",
+    "address","city","state","zip","date_of_birth","issue_date",
+    "expiration_date","sex","eye_color","height","organ_donor",
 ]
 
-SYSTEM_PROMPT: str = (
-    "You are an identity‑document data extractor. "
-    "Extract the following fields from a U.S. driver's‑license image and return *only* **valid JSON** with exactly these keys, in this order: "
-    f"{', '.join(DL_FIELDS)}. "
-    "Use ISO‑8601 dates (YYYY‑MM‑DD). If a field is missing, set its value to an empty string. "
-    "Do **not** output any other keys or explanatory text."
+SYSTEM_PROMPT = (
+    "You are an identity-document data extractor. "
+    "Extract the following fields from a U.S. driver's-license image and return *only* valid JSON" \
+    " with exactly these keys in this order: " + ", ".join(DL_FIELDS) + ". "
+    "Use ISO-8601 dates (YYYY-MM-DD). If a field is missing, set its value to an empty string."
 )
 
-###############################################################################
-# Utility functions
-###############################################################################
+# Utility: image conversion
 
 def _file_to_images(path: Path) -> List[Image.Image]:
-    """Convert a PDF (all pages) or a single image file into a list of PIL Images."""
+    """Convert PDF or image path into list of PIL Images."""
     mime, _ = mimetypes.guess_type(path)
-
     if mime == "application/pdf":
         if convert_from_path is None:
-            raise RuntimeError(
-                "`pdf2image` isn't installed, or Poppler is missing. "
-                "Install with `pip install pdf2image` and add Poppler utilities to PATH."
-            )
-        # 300 DPI balances OCR accuracy and file size.
+            raise RuntimeError("pdf2image not installed or Poppler missing.")
         return convert_from_path(path, dpi=300)
-
     if mime and mime.startswith("image/"):
         return [Image.open(path)]
-
     raise ValueError(f"Unsupported file type: {path}")
 
 
 def _pil_to_base64(img: Image.Image) -> str:
-    """Convert a PIL Image to a base‑64‑encoded PNG string (without the prefix)."""
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return base64.b64encode(buf.getvalue()).decode()
 
 
 def file_to_base64_chunks(path: Path) -> List[str]:
-    """Return one base‑64 PNG string *per* page / image in the file."""
     return [_pil_to_base64(im.convert("RGB")) for im in _file_to_images(path)]
 
+# Model calls
 
 def gpt4o_dl_from_images(b64_images: List[str]) -> dict:
-    """Call GPT‑4o‑mini with the images and get the driver's‑license JSON back as a Python dict."""
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:image/png;base64,{b64}",
-                        "detail": "high",
-                    },
-                }
-                for b64 in b64_images
-            ],
-        },
+        {"role": "user", "content": [
+            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}", "detail": "high"}}
+            for b64 in b64_images
+        ]},
     ]
-
     resp = openai.chat.completions.create(
         model="gpt-4o-mini",
         messages=messages,
@@ -129,72 +105,42 @@ def gpt4o_dl_from_images(b64_images: List[str]) -> dict:
         stream=False,
         max_tokens=4096,
     )
-
     return json.loads(resp.choices[0].message.content)
 
 
-def _safe_date(value: str) -> Optional[date]:
-    """Attempt to parse YYYY‑MM‑DD date strings; return None on failure."""
-    try:
-        return datetime.strptime(value, "%Y-%m-%d").date()
-    except Exception:
-        return None
-
-###############################################################################
-# Streamlit UI
-###############################################################################
-
-st.set_page_config(page_title="Driver‑License Extractor", layout="centered")
-st.title("🪪 ➜ 📋  Driver‑License Data Extractor")
-
-st.markdown(
-    "Upload a driver's‑license photo (or PDF) and receive structured JSON **plus** an interactive, pre‑filled form. "
-    "No data is stored server‑side."
-)
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Sidebar ‑ API key management
-# ──────────────────────────────────────────────────────────────────────────────
-with st.sidebar:
-    st.header("🔑 OpenAI API Key")
-
-    # Try environment / Streamlit secrets first.
-    openai.api_key = os.getenv("OPENAI_API_KEY", st.secrets.get("OPENAI_API_KEY", ""))
-
-    # Fallback: allow the user to paste their key (kept in session_state only).
-    if not openai.api_key:
-        api_key_input = st.text_input(
-            "Enter your OpenAI API key",
-            type="password",
-            placeholder="sk‑...",
-        )
-        if api_key_input:
-            openai.api_key = api_key_input
-    else:
-        st.success("API key loaded from environment / secrets.")
-
-    if not openai.api_key:
-        st.warning("⚠️ No OpenAI API key provided. Enter one above to proceed.")
-
-    st.markdown(
-        "---\n⚠️ **Privacy reminder:** ensure you are authorised to process any personal data you upload."
+def gemini_dl_from_images(b64_images: List[str]) -> dict:
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": [
+            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}", "detail": "high"}}
+            for b64 in b64_images
+        ]},
+    ]
+    # Adjust model name as needed (e.g., "gemini-1.0" or "gemini-pro")
+    resp = genai.chat.completions.create(
+        model="gemini-pro",
+        messages=messages,
+        temperature=0.0,
+        max_output_tokens=4096,
     )
+    # Assuming the content is valid JSON string
+    return json.loads(resp.choices[0].message.content)
 
-# File uploader
+# Streamlit Uploader
 uploaded_file = st.file_uploader(
     "Choose an image or PDF of a driver's license",
-    type=["pdf", "png", "jpg", "jpeg", "tiff", "tif"],
+    type=["pdf","png","jpg","jpeg","tiff","tif"],
 )
 
-# Guard‑rail: only continue if we have both a file *and* an API key.
-if uploaded_file and openai.api_key:
-    if st.button("🚀 Extract License Data", type="primary"):
+# Proceed only if file and both keys are provided
+if uploaded_file and openai.api_key and gemini_key:
+    if st.button("🚀 Extract with GPT-4o & Gemini", type="primary"):
         suffix = Path(uploaded_file.name).suffix
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             tmp.write(uploaded_file.getbuffer())
             tmp_path = Path(tmp.name)
 
-        # Prepare input images (and keep PIL images for preview).
+        # Convert file
         with st.spinner("Converting file …"):
             try:
                 b64_chunks = file_to_base64_chunks(tmp_path)
@@ -203,77 +149,53 @@ if uploaded_file and openai.api_key:
                 st.error(f"Error processing file: {e}")
                 st.stop()
 
-        # Call the OpenAI API.
-        with st.spinner(f"Sending {len(b64_chunks)} page(s)/image(s) to GPT‑4o‑mini …"):
+        # Call both models
+        with st.spinner("Extracting with GPT-4o-mini …"):
             try:
-                dl_json = gpt4o_dl_from_images(b64_chunks)
+                dl_openai = gpt4o_dl_from_images(b64_chunks)
             except Exception as e:
                 st.error(f"OpenAI API error: {e}")
-                st.stop()
+                dl_openai = {k: "" for k in DL_FIELDS}
+        with st.spinner("Extracting with Gemini …"):
+            try:
+                dl_gemini = gemini_dl_from_images(b64_chunks)
+            except Exception as e:
+                st.error(f"Gemini API error: {e}")
+                dl_gemini = {k: "" for k in DL_FIELDS}
 
         st.success("Extraction complete!")
 
-        # Side‑by‑side layout for images and results.
-        col1, col2 = st.columns(2)
+        # Layout: images + two results
+        col_img, col_oai, col_gem = st.columns(3)
 
-        with col1:
+        with col_img:
             st.subheader("🖼️ Converted Image(s)")
             for idx, img in enumerate(images, start=1):
-                st.image(img, caption=f"Page {idx}", use_container_width=True)
+                st.image(img, caption=f"Page {idx}", use_container_width=True)
 
-        with col2:
-            st.subheader("🧾 Extracted JSON")
-            st.json(dl_json, expanded=True)
+        # OpenAI results
+        with col_oai:
+            st.subheader("🤖 GPT-4o-mini JSON")
+            st.json(dl_openai, expanded=True)
             st.download_button(
-                label="💾 Download JSON",
-                data=json.dumps(dl_json, indent=2),
-                file_name=f"{Path(uploaded_file.name).stem}_license.json",
+                label="💾 Download GPT-4o JSON",
+                data=json.dumps(dl_openai, indent=2),
+                file_name=f"{Path(uploaded_file.name).stem}_gpt4o.json",
                 mime="application/json",
             )
 
-            st.divider()
-            st.subheader("📋 Driver‑License Form")
-            with st.form("dl_form"):
-                lic_num = st.text_input("License Number", dl_json.get("license_number", ""))
-                cls = st.text_input("Class", dl_json.get("class", ""))
-                first = st.text_input("First Name", dl_json.get("first_name", ""))
-                middle = st.text_input("Middle Name", dl_json.get("middle_name", ""))
-                last = st.text_input("Last Name", dl_json.get("last_name", ""))
-                address = st.text_input("Address", dl_json.get("address", ""))
-                city = st.text_input("City", dl_json.get("city", ""))
-                state_val = st.text_input("State", dl_json.get("state", ""))
-                zip_code = st.text_input("ZIP", dl_json.get("zip", ""))
+        # Gemini results
+        with col_gem:
+            st.subheader("🤖 Gemini JSON")
+            st.json(dl_gemini, expanded=True)
+            st.download_button(
+                label="💾 Download Gemini JSON",
+                data=json.dumps(dl_gemini, indent=2),
+                file_name=f"{Path(uploaded_file.name).stem}_gemini.json",
+                mime="application/json",
+            )
 
-                dob_raw = dl_json.get("date_of_birth", "")
-                dob = _safe_date(dob_raw) or date.today()
-                dob_in = st.date_input("Date of Birth", dob)
-
-                iss_raw = dl_json.get("issue_date", "")
-                iss = _safe_date(iss_raw) or date.today()
-                iss_in = st.date_input("Issue Date", iss)
-
-                exp_raw = dl_json.get("expiration_date", "")
-                exp = _safe_date(exp_raw) or date.today()
-                exp_in = st.date_input("Expiration Date", exp)
-
-                sex = st.text_input("Sex", dl_json.get("sex", ""))
-                eye = st.text_input("Eye Color", dl_json.get("eye_color", ""))
-                height = st.text_input("Height", dl_json.get("height", ""))
-                organ_default = dl_json.get("organ_donor", "")
-                organ = st.selectbox(
-                    "Organ Donor",
-                    ["", "Yes", "No"],
-                    index=["", "Yes", "No"].index(organ_default if organ_default in ["", "Yes", "No"] else ""),
-                )
-
-                submitted = st.form_submit_button("✅ Save / Update")
-                if submitted:
-                    st.success("Form submitted (not persisted in this demo).")
-
-            st.caption("All form data remains in the browser session and is **not** transmitted.")
-
-# If the user has not provided the required inputs, give gentle guidance.
-elif uploaded_file and not openai.api_key:
-    st.info("Please provide an OpenAI API key in the sidebar to proceed.")
+elif uploaded_file and (not openai.api_key or not gemini_key):
+    st.info("Please provide both OpenAI and Gemini API keys in the sidebar to proceed.")
 else:
-    st.write("👈 Upload a file and provide an API key to get started.")
+    st.write("👈 Upload a file and provide API keys to get started.")
