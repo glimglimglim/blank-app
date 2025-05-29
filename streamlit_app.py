@@ -14,6 +14,7 @@ import openai
 import streamlit as st
 from PIL import Image
 
+# Optional PDF support
 try:
     from pdf2image import convert_from_path
 except ImportError:
@@ -29,11 +30,10 @@ from google.genai import types
 st.set_page_config(page_title="Driver-License Extractor", layout="centered")
 st.title("🪪 ➜ 📋  Driver-License Data Extractor")
 
-# Expected JSON fields and system prompt
 DL_FIELDS = [
-    "license_number","class","first_name","middle_name","last_name",
-    "address","city","state","zip","date_of_birth","issue_date",
-    "expiration_date","sex","eye_color","height","organ_donor",
+    "license_number", "class", "first_name", "middle_name", "last_name",
+    "address", "city", "state", "zip", "date_of_birth", "issue_date",
+    "expiration_date", "sex", "eye_color", "height", "organ_donor",
 ]
 
 SYSTEM_PROMPT = (
@@ -54,9 +54,9 @@ with st.sidebar:
     # OpenAI key
     openai.api_key = os.getenv("OPENAI_API_KEY", st.secrets.get("OPENAI_API_KEY", ""))
     if not openai.api_key:
-        key = st.text_input("OpenAI API key", type="password", placeholder="sk-...")
-        if key:
-            openai.api_key = key
+        k = st.text_input("OpenAI API key", type="password", placeholder="sk-...")
+        if k:
+            openai.api_key = k
     else:
         st.success("OpenAI key loaded.")
 
@@ -129,23 +129,21 @@ def gpt4o_dl_from_images(b64_images: List[str]) -> dict:
     return json.loads(resp.choices[0].message.content)
 
 def gemini_dl_from_images(b64_images: List[str]) -> dict:
-    contents = [
-        types.Content(
-            role="system",
-            parts=[types.Part.from_text(SYSTEM_PROMPT)]
-        )
-    ] + [
-        types.Content(
-            role="user",
-            parts=[types.Part.from_bytes(data=base64.b64decode(b64), mime_type="image/png")]
-        )
+    # Prepare inline image parts
+    image_parts = [
+        types.Part.from_bytes(data=base64.b64decode(b64), mime_type="image/png")
         for b64 in b64_images
     ]
 
     response = client.models.generate_content(
         model="gemini-2.0-flash",
-        contents=contents,
-        config=types.GenerateContentConfig(response_mime_type="application/json")
+        config=types.GenerateContentConfig(
+            system_instruction=SYSTEM_PROMPT,
+            response_mime_type="application/json",
+            temperature=0.0,
+            max_output_tokens=4096
+        ),
+        contents=image_parts
     )
     return json.loads(response.text)
 
