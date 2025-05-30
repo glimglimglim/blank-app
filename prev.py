@@ -11,7 +11,8 @@ from pathlib import Path
 from typing import List
 
 import boto3
-import openai
+from langfuse.decorators import observe
+from langfuse.openai import openai  # Langfuse-wrapped OpenAI client
 import streamlit as st
 from PIL import Image
 
@@ -21,11 +22,21 @@ try:
 except ImportError:
     convert_from_path = None
 
-from google import genai
-from google.genai import types
+# ──────────────────────────────────────────────────────────────────────────────
+# Langfuse Configuration (via environment variables)
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Provided keys (you can also set via environment or Streamlit secrets)
+LANGFUSE_SECRET_KEY = "sk-lf-884f8f3a-6fcb-41a0-831a-018b355a03b4"
+LANGFUSE_PUBLIC_KEY = "pk-lf-9b6ba0a4-31cd-4347-ab73-17d0c35786c"
+LANGFUSE_HOST = "https://langfuse.ai.wrs.dev"
+
+os.environ.setdefault("LANGFUSE_SECRET_KEY", LANGFUSE_SECRET_KEY)
+os.environ.setdefault("LANGFUSE_PUBLIC_KEY", LANGFUSE_PUBLIC_KEY)
+os.environ.setdefault("LANGFUSE_HOST", LANGFUSE_HOST)
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Configuration
+# Streamlit App Configuration
 # ──────────────────────────────────────────────────────────────────────────────
 
 st.set_page_config(page_title="Driver-License Extractor", layout="centered")
@@ -52,6 +63,7 @@ SYSTEM_PROMPT = (
 with st.sidebar:
     st.header("🔑 API Keys & Clients")
 
+    # OpenAI (Langfuse-wrapped)
     openai.api_key = os.getenv("OPENAI_API_KEY", st.secrets.get("OPENAI_API_KEY", ""))
     if not openai.api_key:
         k = st.text_input("OpenAI API key", type="password", placeholder="sk-...")
@@ -60,6 +72,7 @@ with st.sidebar:
     else:
         st.success("OpenAI key loaded.")
 
+    # Gemini
     gemini_key = os.getenv("GEMINI_API_KEY", st.secrets.get("GEMINI_API_KEY", ""))
     if not gemini_key:
         gemini_key = st.text_input(
@@ -69,16 +82,19 @@ with st.sidebar:
             help="Required for Gemini extraction"
         )
     if gemini_key:
+        from google import genai
+        from google.genai import types
         client = genai.Client(api_key=gemini_key)
         st.success("Gemini client initialized.")
 
+    # AWS Textract
     try:
         aws_cfg = st.secrets["aws"]
         textract = boto3.client(
             "textract",
             aws_access_key_id=aws_cfg["aws_access_key_id"],
             aws_secret_access_key=aws_cfg["aws_secret_access_key"],
-            aws_session_token=aws_cfg["aws_session_token"],
+            aws_session_token=aws_cfg.get("aws_session_token"),
             region_name=aws_cfg.get("region_name", "us-east-1"),
         )
         st.success("AWS Textract client initialized.")
@@ -137,10 +153,11 @@ def render_fields_grid(container, title: str, data: dict, num_cols: int = 3):
         """, unsafe_allow_html=True)
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Model Invocation Functions
+# Model Invocation Functions with Langfuse Tracing
 # ──────────────────────────────────────────────────────────────────────────────
 
-def gpt4o_dl_from_images(b64_images: List[str]) -> dict:
+@observe(as_type="generation", name="GPT-4.1-mini DL Extraction")
+def gpt4_1_mini_dl_from_images(b64_images: List[str]) -> dict:
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {
@@ -155,7 +172,7 @@ def gpt4o_dl_from_images(b64_images: List[str]) -> dict:
         },
     ]
     resp = openai.chat.completions.create(
-        model="gpt-4o-mini",
+        model="gpt-4.1-mini",
         messages=messages,
         temperature=0.0,
         response_format={"type": "json_object"},
@@ -164,13 +181,39 @@ def gpt4o_dl_from_images(b64_images: List[str]) -> dict:
     )
     return json.loads(resp.choices[0].message.content)
 
+@observe(as_type="generation", name="GPT-4.1 DL Extraction")
+def gpt4_1_dl_from_images(b64_images: List[str]) -> dict:
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/png;base64,{b64}", "detail": "high"}
+                }
+                for b64 in b64_images
+            ],
+        },
+    ]
+    resp = openai.chat.completions.create(
+        model="gpt-4.1",
+        messages=messages,
+        temperature=0.0,
+        response_format={"type": "json_object"},
+        stream=False,
+        max_tokens=4096,
+    )
+    return json.loads(resp.choices[0].message.content)
+
+@observe(as_type="generation", name="Gemini 2.0 Flash DL Extraction")
 def gemini_dl_from_images(b64_images: List[str]) -> dict:
     image_parts = [
         types.Part.from_bytes(data=base64.b64decode(b64), mime_type="image/png")
         for b64 in b64_images
     ]
     response = client.models.generate_content(
-        model="gemini-2.0-flash",
+        model="gemini-2.0-flash-lite-preview-02-05",
         config=types.GenerateContentConfig(
             system_instruction=SYSTEM_PROMPT,
             response_mime_type="application/json",
@@ -181,6 +224,25 @@ def gemini_dl_from_images(b64_images: List[str]) -> dict:
     )
     return json.loads(response.text)
 
+@observe(as_type="generation", name="Gemini 2.5 Flash DL Extraction")
+def gemini_2_5_dl_from_images(b64_images: List[str]) -> dict:
+    image_parts = [
+        types.Part.from_bytes(data=base64.b64decode(b64), mime_type="image/png")
+        for b64 in b64_images
+    ]
+    response = client.models.generate_content(
+        model="gemini-2.5-flash-preview-05-20",
+        config=types.GenerateContentConfig(
+            system_instruction=SYSTEM_PROMPT,
+            response_mime_type="application/json",
+            temperature=0.0,
+            max_output_tokens=4096
+        ),
+        contents=image_parts
+    )
+    return json.loads(response.text)
+
+@observe(as_type="custom", name="AWS Textract DL Extraction")
 def textract_dl_from_images(path: Path) -> dict:
     FIELD_KEYWORDS = {
         "license_number": ["license", "lic no", "dl number"],
@@ -253,7 +315,7 @@ uploaded_file = st.file_uploader(
 )
 
 if uploaded_file and openai.api_key and gemini_key:
-    if st.button("🚀 Extract with GPT-4o, Gemini & AWS Textract", type="primary"):
+    if st.button("🚀 Extract with GPT-4.1-mini, GPT-4.1, Gemini & AWS Textract", type="primary"):
         suffix = Path(uploaded_file.name).suffix
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             tmp.write(uploaded_file.getbuffer())
@@ -267,19 +329,33 @@ if uploaded_file and openai.api_key and gemini_key:
                 st.error(f"Error processing file: {e}")
                 st.stop()
 
-        with st.spinner("Extracting with GPT-4o-mini …"):
+        with st.spinner("Extracting with GPT-4.1-mini …"):
             try:
-                dl_openai = gpt4o_dl_from_images(b64_chunks)
+                dl_openai_mini = gpt4_1_mini_dl_from_images(b64_chunks)
             except Exception as e:
-                st.error(f"OpenAI API error: {e}")
-                dl_openai = {k: "" for k in DL_FIELDS}
+                st.error(f"OpenAI API error (mini): {e}")
+                dl_openai_mini = {k: "" for k in DL_FIELDS}
 
-        with st.spinner("Extracting with Gemini …"):
+        with st.spinner("Extracting with GPT-4.1 …"):
+            try:
+                dl_gpt4_1 = gpt4_1_dl_from_images(b64_chunks)
+            except Exception as e:
+                st.error(f"OpenAI API error (full): {e}")
+                dl_gpt4_1 = {k: "" for k in DL_FIELDS}
+
+        with st.spinner("Extracting with Gemini 2.0 Flash …"):
             try:
                 dl_gemini = gemini_dl_from_images(b64_chunks)
             except Exception as e:
-                st.error(f"Gemini API error: {e}")
+                st.error(f"Gemini API error (2.0 Flash): {e}")
                 dl_gemini = {k: "" for k in DL_FIELDS}
+
+        with st.spinner("Extracting with Gemini 2.5 Flash …"):
+            try:
+                dl_gemini_2_5 = gemini_2_5_dl_from_images(b64_chunks)
+            except Exception as e:
+                st.error(f"Gemini API error (2.5 Flash): {e}")
+                dl_gemini_2_5 = {k: "" for k in DL_FIELDS}
 
         with st.spinner("Extracting with AWS Textract …"):
             try:
@@ -298,11 +374,29 @@ if uploaded_file and openai.api_key and gemini_key:
                 st.image(img, caption=f"Page {idx}", use_container_width=True)
 
         with col_models:
-            tabs = st.tabs(["🤖 OpenAI", "🤖 Gemini", "🧾 Textract"])
+            tabs = st.tabs([
+                "🤖 GPT-4.1-mini Fields",
+                "🤖 GPT-4.1 Fields",
+                "🤖 Gemini 2.0 Flash Fields",
+                "🤖 Gemini 2.5 Flash Fields",
+                "🧾 Textract Fields"
+            ])
             for tab, title, data in zip(
                 tabs,
-                ["GPT-4o-mini Fields", "Gemini 2.0 Flash Fields", "Textract Fields"],
-                [dl_openai, dl_gemini, dl_textract],
+                [
+                    "GPT-4.1-mini Fields",
+                    "GPT-4.1 Fields",
+                    "Gemini 2.0 Flash Fields",
+                    "Gemini 2.5 Flash Fields",
+                    "Textract Fields"
+                ],
+                [
+                    dl_openai_mini,
+                    dl_gpt4_1,
+                    dl_gemini,
+                    dl_gemini_2_5,
+                    dl_textract
+                ],
             ):
                 with tab:
                     render_fields_grid(tab, title, data)

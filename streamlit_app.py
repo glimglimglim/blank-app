@@ -42,18 +42,35 @@ os.environ.setdefault("LANGFUSE_HOST", LANGFUSE_HOST)
 st.set_page_config(page_title="Driver-License Extractor", layout="centered")
 st.title("🪪 ➜ 📋  Driver-License Data Extractor")
 
-DL_FIELDS = [
-    "license_number", "class", "first_name", "middle_name", "last_name",
-    "address", "city", "state", "zip", "date_of_birth", "issue_date",
-    "expiration_date", "sex", "eye_color", "hair", "height", "organ_donor", "weight"
-]
+DOCUMENT_TYPES = {
+    "Driver's License": {
+        "fields": [
+            "license_number", "class", "first_name", "middle_name", "last_name",
+            "address", "city", "state", "zip", "date_of_birth", "issue_date",
+            "expiration_date", "sex", "eye_color", "hair", "height", "organ_donor", "weight"
+        ],
+        "title": "🪪 ➜ 📋  Driver-License Data Extractor"
+    },
+    "Insurance Card": {
+        "fields": [
+            "insurance_company", "member_id", "group_number", "plan_type",
+            "insured_name", "insured_dob", "relationship", "effective_date",
+            "expiration_date", "copay", "rx_bin", "rx_pcn", "customer_service_number"
+        ],
+        "title": "💳 ➜ 📋  Insurance Card Data Extractor"
+    }
+}
+
+document_type = st.selectbox("Select document type", list(DOCUMENT_TYPES.keys()))
+FIELDS = DOCUMENT_TYPES[document_type]["fields"]
+st.set_page_config(page_title="Document Extractor", layout="centered")
+st.title(DOCUMENT_TYPES[document_type]["title"])
 
 SYSTEM_PROMPT = (
-    "You are an identity-document data extractor. "
-    "Extract the following fields from a U.S. driver's-license image and return *only* valid JSON "
-    "with exactly these keys in this order: "
-    + ", ".join(DL_FIELDS)
-    + ". Use ISO-8601 dates (YYYY-MM-DD). If a field is missing, set its value to an empty string."
+    f"You are an identity-document data extractor. "
+    f"Extract the following fields from a U.S. {document_type.lower()} image and return *only* valid JSON "
+    f"with exactly these keys in this order: " + ", ".join(FIELDS) +
+    ". Use ISO-8601 dates (YYYY-MM-DD). If a field is missing, set its value to an empty string."
 )
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -131,7 +148,7 @@ def file_to_base64_chunks(path: Path) -> List[str]:
 def render_fields_grid(container, title: str, data: dict, num_cols: int = 3):
     container.subheader(title)
     cols = container.columns(num_cols)
-    for idx, field in enumerate(DL_FIELDS):
+    for idx, field in enumerate(FIELDS):
         col = cols[idx % num_cols]
         label = field.replace("_", " ").title()
         value = data.get(field, "") or ""
@@ -310,7 +327,7 @@ def textract_dl_from_images(path: Path) -> dict:
 # ──────────────────────────────────────────────────────────────────────────────
 
 uploaded_file = st.file_uploader(
-    "Choose an image or PDF of a driver's license",
+    f"Choose an image or PDF of a {document_type.lower()}",
     type=["pdf", "png", "jpg", "jpeg", "tiff", "tif"],
 )
 
