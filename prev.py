@@ -25,6 +25,8 @@ except ImportError:
 # ──────────────────────────────────────────────────────────────────────────────
 # Langfuse Configuration (via environment variables)
 # ──────────────────────────────────────────────────────────────────────────────
+
+# Provided keys (you can also set via environment or Streamlit secrets)
 LANGFUSE_SECRET_KEY = "sk-lf-884f8f3a-6fcb-41a0-831a-018b355a03b4"
 LANGFUSE_PUBLIC_KEY = "pk-lf-9b6ba0a4-31cd-4347-ab73-17d0c35786c"
 LANGFUSE_HOST = "https://langfuse.ai.wrs.dev"
@@ -34,52 +36,30 @@ os.environ.setdefault("LANGFUSE_PUBLIC_KEY", LANGFUSE_PUBLIC_KEY)
 os.environ.setdefault("LANGFUSE_HOST", LANGFUSE_HOST)
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Streamlit App Configuration (must be first Streamlit command)
+# Streamlit App Configuration
 # ──────────────────────────────────────────────────────────────────────────────
-st.set_page_config(page_title="Document Extractor", layout="centered")
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Document Type Definitions
-# ──────────────────────────────────────────────────────────────────────────────
-DOCUMENT_TYPES = {
-    "Driver's License": {
-        "fields": [
-            "license_number", "class", "first_name", "middle_name", "last_name",
-            "address", "city", "state", "zip", "date_of_birth", "issue_date",
-            "expiration_date", "sex", "eye_color", "hair", "height", "organ_donor", "weight"
-        ],
-        "title": "🪪 ➜ 📋  Driver-License Data Extractor"
-    },
-    "Insurance Card": {
-        "fields": [
-            "insurance_company", "member_id", "group_number", "plan_type",
-            "insured_name", "insured_dob", "relationship", "effective_date",
-            "expiration_date", "copay", "rx_bin", "rx_pcn", "customer_service_number"
-        ],
-        "title": "💳 ➜ 📋  Insurance Card Data Extractor"
-    }
-}
+st.set_page_config(page_title="Driver-License Extractor", layout="centered")
+st.title("🪪 ➜ 📋  Driver-License Data Extractor")
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Streamlit UI — Document Type Selection and Title
-# ──────────────────────────────────────────────────────────────────────────────
-document_type = st.selectbox("Select document type", list(DOCUMENT_TYPES.keys()))
-st.title(DOCUMENT_TYPES[document_type]["title"])
-FIELDS = DOCUMENT_TYPES[document_type]["fields"]
+DL_FIELDS = [
+    "license_number", "class", "first_name", "middle_name", "last_name",
+    "address", "city", "state", "zip", "date_of_birth", "issue_date",
+    "expiration_date", "sex", "eye_color", "hair", "height", "organ_donor", "weight"
+]
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Prompt for LLMs
-# ──────────────────────────────────────────────────────────────────────────────
 SYSTEM_PROMPT = (
-    f"You are an identity-document data extractor. "
-    f"Extract the following fields from a U.S. {document_type.lower()} image and return *only* valid JSON "
-    f"with exactly these keys in this order: " + ", ".join(FIELDS) +
-    ". Use ISO-8601 dates (YYYY-MM-DD). If a field is missing, set its value to an empty string."
+    "You are an identity-document data extractor. "
+    "Extract the following fields from a U.S. driver's-license image and return *only* valid JSON "
+    "with exactly these keys in this order: "
+    + ", ".join(DL_FIELDS)
+    + ". Use ISO-8601 dates (YYYY-MM-DD). If a field is missing, set its value to an empty string."
 )
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Sidebar — API Key & Client Initialization
 # ──────────────────────────────────────────────────────────────────────────────
+
 with st.sidebar:
     st.header("🔑 API Keys & Clients")
 
@@ -140,21 +120,18 @@ def _file_to_images(path: Path) -> List[Image.Image]:
         return [Image.open(path)]
     raise ValueError(f"Unsupported file type: {path}")
 
-
 def _pil_to_base64(img: Image.Image) -> str:
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return base64.b64encode(buf.getvalue()).decode()
 
-
 def file_to_base64_chunks(path: Path) -> List[str]:
     return [_pil_to_base64(im.convert("RGB")) for im in _file_to_images(path)]
-
 
 def render_fields_grid(container, title: str, data: dict, num_cols: int = 3):
     container.subheader(title)
     cols = container.columns(num_cols)
-    for idx, field in enumerate(FIELDS):
+    for idx, field in enumerate(DL_FIELDS):
         col = cols[idx % num_cols]
         label = field.replace("_", " ").title()
         value = data.get(field, "") or ""
@@ -179,17 +156,23 @@ def render_fields_grid(container, title: str, data: dict, num_cols: int = 3):
 # Model Invocation Functions with Langfuse Tracing
 # ──────────────────────────────────────────────────────────────────────────────
 
-@observe(as_type="generation", name="GPT-4.1-mini Extraction")
-def model_dl_from_images(b64_images: List[str], model_name: str) -> dict:
+@observe(as_type="generation", name="GPT-4.1-mini DL Extraction")
+def gpt4_1_mini_dl_from_images(b64_images: List[str]) -> dict:
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": [
-            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}", "detail": "high"}}
-            for b64 in b64_images
-        ]},
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/png;base64,{b64}", "detail": "high"}
+                }
+                for b64 in b64_images
+            ],
+        },
     ]
     resp = openai.chat.completions.create(
-        model=model_name,
+        model="gpt-4.1-mini",
         messages=messages,
         temperature=0.0,
         response_format={"type": "json_object"},
@@ -198,46 +181,88 @@ def model_dl_from_images(b64_images: List[str], model_name: str) -> dict:
     )
     return json.loads(resp.choices[0].message.content)
 
-@observe(as_type="custom", name="AWS Textract Extraction")
-def textract_from_images(path: Path) -> dict:
-    results = {k: "" for k in FIELDS}
-    if document_type == "Driver's License":
-        FIELD_KEYWORDS = {
-            "license_number": ["license", "lic no", "dl number"],
-            "class": ["class"],
-            "first_name": ["first name", "given name"],
-            "middle_name": ["middle name"],
-            "last_name": ["last name", "surname"],
-            "address": ["address"],
-            "city": ["city"],
-            "state": ["state"],
-            "zip": ["zip", "postal code"],
-            "date_of_birth": ["date of birth", "dob"],
-            "issue_date": ["date of issue", "issue date"],
-            "expiration_date": ["expiration date", "exp date", "exp"],
-            "sex": ["sex", "gender"],
-            "eye_color": ["eye color", "eyes"],
-            "height": ["height"],
-            "organ_donor": ["organ donor"]
-        }
-    elif document_type == "Insurance Card":
-        FIELD_KEYWORDS = {
-            "insurance_company": ["insurance", "company", "provider", "insurer"],
-            "member_id": ["member id", "member number", "subscriber id", "id number"],
-            "group_number": ["group number", "group"],
-            "plan_type": ["plan type", "plan"],
-            "insured_name": ["insured name", "policyholder", "insured"],
-            "insured_dob": ["date of birth", "dob", "birth date"],
-            "relationship": ["relationship", "relation"],
-            "effective_date": ["effective date", "effective"],
-            "expiration_date": ["expiration date", "exp date", "expiry"],
-            "copay": ["copay"],
-            "rx_bin": ["bin", "rx bin"],
-            "rx_pcn": ["pcn", "rx pcn"],
-            "customer_service_number": ["customer service", "service number", "phone number"]
-        }
-    else:
-        return results
+@observe(as_type="generation", name="GPT-4.1 DL Extraction")
+def gpt4_1_dl_from_images(b64_images: List[str]) -> dict:
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/png;base64,{b64}", "detail": "high"}
+                }
+                for b64 in b64_images
+            ],
+        },
+    ]
+    resp = openai.chat.completions.create(
+        model="gpt-4.1",
+        messages=messages,
+        temperature=0.0,
+        response_format={"type": "json_object"},
+        stream=False,
+        max_tokens=4096,
+    )
+    return json.loads(resp.choices[0].message.content)
+
+@observe(as_type="generation", name="Gemini 2.0 Flash DL Extraction")
+def gemini_dl_from_images(b64_images: List[str]) -> dict:
+    image_parts = [
+        types.Part.from_bytes(data=base64.b64decode(b64), mime_type="image/png")
+        for b64 in b64_images
+    ]
+    response = client.models.generate_content(
+        model="gemini-2.0-flash-lite-preview-02-05",
+        config=types.GenerateContentConfig(
+            system_instruction=SYSTEM_PROMPT,
+            response_mime_type="application/json",
+            temperature=0.0,
+            max_output_tokens=4096
+        ),
+        contents=image_parts
+    )
+    return json.loads(response.text)
+
+@observe(as_type="generation", name="Gemini 2.5 Flash DL Extraction")
+def gemini_2_5_dl_from_images(b64_images: List[str]) -> dict:
+    image_parts = [
+        types.Part.from_bytes(data=base64.b64decode(b64), mime_type="image/png")
+        for b64 in b64_images
+    ]
+    response = client.models.generate_content(
+        model="gemini-2.5-flash-preview-05-20",
+        config=types.GenerateContentConfig(
+            system_instruction=SYSTEM_PROMPT,
+            response_mime_type="application/json",
+            temperature=0.0,
+            max_output_tokens=4096
+        ),
+        contents=image_parts
+    )
+    return json.loads(response.text)
+
+@observe(as_type="custom", name="AWS Textract DL Extraction")
+def textract_dl_from_images(path: Path) -> dict:
+    FIELD_KEYWORDS = {
+        "license_number": ["license", "lic no", "dl number"],
+        "class": ["class"],
+        "first_name": ["first name", "given name"],
+        "middle_name": ["middle name"],
+        "last_name": ["last name", "surname"],
+        "address": ["address"],
+        "city": ["city"],
+        "state": ["state"],
+        "zip": ["zip", "postal code"],
+        "date_of_birth": ["date of birth", "dob"],
+        "issue_date": ["date of issue", "issue date"],
+        "expiration_date": ["expiration date", "exp date", "exp"],
+        "sex": ["sex", "gender"],
+        "eye_color": ["eye color", "eyes"],
+        "height": ["height"],
+        "organ_donor": ["organ donor"],
+    }
+    results = {k: "" for k in DL_FIELDS}
 
     images = _file_to_images(path)
     for img in images:

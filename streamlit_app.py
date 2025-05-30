@@ -246,6 +246,7 @@ def textract_from_images(path: Path) -> dict:
         resp = textract.analyze_document(Document={'Bytes': buf.getvalue()}, FeatureTypes=['FORMS'])
         blocks = resp.get('Blocks', [])
 
+
         block_map = {b['Id']: b for b in blocks}
         key_map = {b['Id']: b for b in blocks if b['BlockType']=='KEY_VALUE_SET' and 'KEY' in b.get('EntityTypes', [])}
         value_map = {b['Id']: b for b in blocks if b['BlockType']=='KEY_VALUE_SET' and 'VALUE' in b.get('EntityTypes', [])}
