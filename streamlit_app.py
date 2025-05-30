@@ -28,7 +28,7 @@ except ImportError:
 
 # Provided keys (you can also set via environment or Streamlit secrets)
 LANGFUSE_SECRET_KEY = "sk-lf-884f8f3a-6fcb-41a0-831a-018b355a03b4"
-LANGFUSE_PUBLIC_KEY = "pk-lf-9b6ba0a4-31cd-4347-ab73-17d0c35786b6"
+LANGFUSE_PUBLIC_KEY = "pk-lf-9b6ba0a4-31cd-4347-ab73-17d0c35786c"
 LANGFUSE_HOST = "https://langfuse.ai.wrs.dev"
 
 os.environ.setdefault("LANGFUSE_SECRET_KEY", LANGFUSE_SECRET_KEY)
@@ -156,8 +156,8 @@ def render_fields_grid(container, title: str, data: dict, num_cols: int = 3):
 # Model Invocation Functions with Langfuse Tracing
 # ──────────────────────────────────────────────────────────────────────────────
 
-@observe(as_type="generation", name="GPT-4o-mini DL Extraction")
-def gpt4o_dl_from_images(b64_images: List[str]) -> dict:
+@observe(as_type="generation", name="GPT-4.1-mini DL Extraction")
+def gpt4_1_mini_dl_from_images(b64_images: List[str]) -> dict:
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {
@@ -172,7 +172,32 @@ def gpt4o_dl_from_images(b64_images: List[str]) -> dict:
         },
     ]
     resp = openai.chat.completions.create(
-        model="gpt-4o-mini",
+        model="gpt-4.1-mini",
+        messages=messages,
+        temperature=0.0,
+        response_format={"type": "json_object"},
+        stream=False,
+        max_tokens=4096,
+    )
+    return json.loads(resp.choices[0].message.content)
+
+@observe(as_type="generation", name="GPT-4.1 DL Extraction")
+def gpt4_1_dl_from_images(b64_images: List[str]) -> dict:
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/png;base64,{b64}", "detail": "high"}
+                }
+                for b64 in b64_images
+            ],
+        },
+    ]
+    resp = openai.chat.completions.create(
+        model="gpt-4.1",
         messages=messages,
         temperature=0.0,
         response_format={"type": "json_object"},
@@ -188,8 +213,25 @@ def gemini_dl_from_images(b64_images: List[str]) -> dict:
         for b64 in b64_images
     ]
     response = client.models.generate_content(
-        # model="gemini-2.0-flash",
-        model = "gemini-2.0-flash-lite-preview-02-05",
+        model="gemini-2.0-flash-lite-preview-02-05",
+        config=types.GenerateContentConfig(
+            system_instruction=SYSTEM_PROMPT,
+            response_mime_type="application/json",
+            temperature=0.0,
+            max_output_tokens=4096
+        ),
+        contents=image_parts
+    )
+    return json.loads(response.text)
+
+@observe(as_type="generation", name="Gemini 2.5 Flash DL Extraction")
+def gemini_2_5_dl_from_images(b64_images: List[str]) -> dict:
+    image_parts = [
+        types.Part.from_bytes(data=base64.b64decode(b64), mime_type="image/png")
+        for b64 in b64_images
+    ]
+    response = client.models.generate_content(
+        model="gemini-2.5-flash",
         config=types.GenerateContentConfig(
             system_instruction=SYSTEM_PROMPT,
             response_mime_type="application/json",
@@ -273,7 +315,7 @@ uploaded_file = st.file_uploader(
 )
 
 if uploaded_file and openai.api_key and gemini_key:
-    if st.button("🚀 Extract with GPT-4o, Gemini & AWS Textract", type="primary"):
+    if st.button("🚀 Extract with GPT-4.1-mini, GPT-4.1, Gemini & AWS Textract", type="primary"):
         suffix = Path(uploaded_file.name).suffix
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             tmp.write(uploaded_file.getbuffer())
@@ -287,19 +329,33 @@ if uploaded_file and openai.api_key and gemini_key:
                 st.error(f"Error processing file: {e}")
                 st.stop()
 
-        with st.spinner("Extracting with GPT-4o-mini …"):
+        with st.spinner("Extracting with GPT-4.1-mini …"):
             try:
-                dl_openai = gpt4o_dl_from_images(b64_chunks)
+                dl_openai_mini = gpt4_1_mini_dl_from_images(b64_chunks)
             except Exception as e:
-                st.error(f"OpenAI API error: {e}")
-                dl_openai = {k: "" for k in DL_FIELDS}
+                st.error(f"OpenAI API error (mini): {e}")
+                dl_openai_mini = {k: "" for k in DL_FIELDS}
 
-        with st.spinner("Extracting with Gemini …"):
+        with st.spinner("Extracting with GPT-4.1 …"):
+            try:
+                dl_gpt4_1 = gpt4_1_dl_from_images(b64_chunks)
+            except Exception as e:
+                st.error(f"OpenAI API error (full): {e}")
+                dl_gpt4_1 = {k: "" for k in DL_FIELDS}
+
+        with st.spinner("Extracting with Gemini 2.0 Flash …"):
             try:
                 dl_gemini = gemini_dl_from_images(b64_chunks)
             except Exception as e:
-                st.error(f"Gemini API error: {e}")
+                st.error(f"Gemini API error (2.0 Flash): {e}")
                 dl_gemini = {k: "" for k in DL_FIELDS}
+
+        with st.spinner("Extracting with Gemini 2.5 Flash …"):
+            try:
+                dl_gemini_2_5 = gemini_2_5_dl_from_images(b64_chunks)
+            except Exception as e:
+                st.error(f"Gemini API error (2.5 Flash): {e}")
+                dl_gemini_2_5 = {k: "" for k in DL_FIELDS}
 
         with st.spinner("Extracting with AWS Textract …"):
             try:
@@ -318,11 +374,29 @@ if uploaded_file and openai.api_key and gemini_key:
                 st.image(img, caption=f"Page {idx}", use_container_width=True)
 
         with col_models:
-            tabs = st.tabs(["🤖 OpenAI", "🤖 Gemini", "🧾 Textract"])
+            tabs = st.tabs([
+                "🤖 GPT-4.1-mini Fields",
+                "🤖 GPT-4.1 Fields",
+                "🤖 Gemini 2.0 Flash Fields",
+                "🤖 Gemini 2.5 Flash Fields",
+                "🧾 Textract Fields"
+            ])
             for tab, title, data in zip(
                 tabs,
-                ["GPT-4o-mini Fields", "Gemini 2.0 Flash Fields", "Textract Fields"],
-                [dl_openai, dl_gemini, dl_textract],
+                [
+                    "GPT-4.1-mini Fields",
+                    "GPT-4.1 Fields",
+                    "Gemini 2.0 Flash Fields",
+                    "Gemini 2.5 Flash Fields",
+                    "Textract Fields"
+                ],
+                [
+                    dl_openai_mini,
+                    dl_gpt4_1,
+                    dl_gemini,
+                    dl_gemini_2_5,
+                    dl_textract
+                ],
             ):
                 with tab:
                     render_fields_grid(tab, title, data)
