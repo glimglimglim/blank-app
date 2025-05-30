@@ -188,7 +188,8 @@ def gemini_dl_from_images(b64_images: List[str]) -> dict:
         for b64 in b64_images
     ]
     response = client.models.generate_content(
-        model="gemini-2.0-flash",
+        # model="gemini-2.0-flash",
+        model = "gemini-2.0-flash-lite-preview-02-05",
         config=types.GenerateContentConfig(
             system_instruction=SYSTEM_PROMPT,
             response_mime_type="application/json",
