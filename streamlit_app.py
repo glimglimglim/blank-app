@@ -200,7 +200,6 @@ def model_dl_from_images(b64_images: List[str], model_name: str) -> dict:
 
 @observe(as_type="custom", name="AWS Textract Extraction")
 def textract_from_images(path: Path) -> dict:
-    # Only supported for Driver's License; returns empty for Insurance
     results = {k: "" for k in FIELDS}
     if document_type == "Driver's License":
         FIELD_KEYWORDS = {
@@ -219,46 +218,65 @@ def textract_from_images(path: Path) -> dict:
             "sex": ["sex", "gender"],
             "eye_color": ["eye color", "eyes"],
             "height": ["height"],
-            "organ_donor": ["organ donor"],
+            "organ_donor": ["organ donor"]
         }
-        images = _file_to_images(path)
-        for img in images:
-            buf = io.BytesIO()
-            img.convert("RGB").save(buf, format="PNG")
-            resp = textract.analyze_document(Document={'Bytes': buf.getvalue()}, FeatureTypes=['FORMS'])
-            blocks = resp.get('Blocks', [])
+    elif document_type == "Insurance Card":
+        FIELD_KEYWORDS = {
+            "insurance_company": ["insurance", "company", "provider", "insurer"],
+            "member_id": ["member id", "member number", "subscriber id", "id number"],
+            "group_number": ["group number", "group"],
+            "plan_type": ["plan type", "plan"],
+            "insured_name": ["insured name", "policyholder", "insured"],
+            "insured_dob": ["date of birth", "dob", "birth date"],
+            "relationship": ["relationship", "relation"],
+            "effective_date": ["effective date", "effective"],
+            "expiration_date": ["expiration date", "exp date", "expiry"],
+            "copay": ["copay"],
+            "rx_bin": ["bin", "rx bin"],
+            "rx_pcn": ["pcn", "rx pcn"],
+            "customer_service_number": ["customer service", "service number", "phone number"]
+        }
+    else:
+        return results
 
-            block_map = {b['Id']: b for b in blocks}
-            key_map = {b['Id']: b for b in blocks if b['BlockType']=='KEY_VALUE_SET' and 'KEY' in b.get('EntityTypes', [])}
-            value_map = {b['Id']: b for b in blocks if b['BlockType']=='KEY_VALUE_SET' and 'VALUE' in b.get('EntityTypes', [])}
+    images = _file_to_images(path)
+    for img in images:
+        buf = io.BytesIO()
+        img.convert("RGB").save(buf, format="PNG")
+        resp = textract.analyze_document(Document={'Bytes': buf.getvalue()}, FeatureTypes=['FORMS'])
+        blocks = resp.get('Blocks', [])
 
-            def get_text(block):
-                text = ""
-                for rel in block.get('Relationships', []):
-                    if rel['Type']=='CHILD':
-                        for cid in rel['Ids']:
-                            word = block_map.get(cid)
-                            if word and word['BlockType']=='WORD':
-                                text += word['Text'] + ' '
-                return text.strip()
+        block_map = {b['Id']: b for b in blocks}
+        key_map = {b['Id']: b for b in blocks if b['BlockType']=='KEY_VALUE_SET' and 'KEY' in b.get('EntityTypes', [])}
+        value_map = {b['Id']: b for b in blocks if b['BlockType']=='KEY_VALUE_SET' and 'VALUE' in b.get('EntityTypes', [])}
 
-            kvs: dict[str, str] = {}
-            for key_id, key_block in key_map.items():
-                key_text = get_text(key_block).lower()
-                val_text = ""
-                for rel in key_block.get('Relationships', []):
-                    if rel['Type']=='VALUE':
-                        for vid in rel['Ids']:
-                            val_block = value_map.get(vid)
-                            if val_block:
-                                val_text = get_text(val_block)
-                kvs[key_text] = val_text
+        def get_text(block):
+            text = ""
+            for rel in block.get('Relationships', []):
+                if rel['Type']=='CHILD':
+                    for cid in rel['Ids']:
+                        word = block_map.get(cid)
+                        if word and word['BlockType']=='WORD':
+                            text += word['Text'] + ' '
+            return text.strip()
 
-            for field, keywords in FIELD_KEYWORDS.items():
-                for key_text, val_text in kvs.items():
-                    if any(keyword in key_text for keyword in keywords):
-                        results[field] = val_text
-                        break
+        kvs: dict[str, str] = {}
+        for key_block in key_map.values():
+            key_text = get_text(key_block).lower()
+            val_text = ""
+            for rel in key_block.get('Relationships', []):
+                if rel['Type']=='VALUE':
+                    for vid in rel['Ids']:
+                        val_block = value_map.get(vid)
+                        if val_block:
+                            val_text = get_text(val_block)
+            kvs[key_text] = val_text
+
+        for field, keywords in FIELD_KEYWORDS.items():
+            for key_text, val_text in kvs.items():
+                if any(keyword in key_text for keyword in keywords):
+                    results[field] = val_text
+                    break
     return results
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -284,7 +302,7 @@ if uploaded_file and openai.api_key and gemini_key:
                 st.error(f"Error processing file: {e}")
                 st.stop()
 
-        # Run LLM extractions
+        # Run extractions
         try:
             dl_openai_mini = model_dl_from_images(b64_chunks, "gpt-4.1-mini")
         except Exception:
@@ -325,7 +343,7 @@ if uploaded_file and openai.api_key and gemini_key:
             tabs = st.tabs([f"{name} Fields" for name in ["GPT-4.1-mini", "GPT-4.1", "Gemini 2.5 Flash", "Textract"]])
             for tab, data in zip(tabs, [dl_openai_mini, dl_gpt4_1, dl_gemini, dl_textract]):
                 with tab:
-                    render_fields_grid(tab, f"{tab.title} Fields", data)
+                    render_fields_grid(tab, tab.title, data)
 
 elif uploaded_file:
     st.info("Please provide OpenAI, Gemini, and AWS credentials to proceed.")
