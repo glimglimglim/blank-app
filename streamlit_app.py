@@ -231,7 +231,7 @@ def gemini_2_5_dl_from_images(b64_images: List[str]) -> dict:
         for b64 in b64_images
     ]
     response = client.models.generate_content(
-        model="gemini-2.5-flash",
+        model="gemini-2.5-flash-preview-05-20",
         config=types.GenerateContentConfig(
             system_instruction=SYSTEM_PROMPT,
             response_mime_type="application/json",
