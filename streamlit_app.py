@@ -38,8 +38,6 @@ os.environ.setdefault("LANGFUSE_HOST", LANGFUSE_HOST)
 # ──────────────────────────────────────────────────────────────────────────────
 st.set_page_config(page_title="Document Extractor", layout="centered")
 
-# Title will be set dynamically below
-
 # ──────────────────────────────────────────────────────────────────────────────
 # Document Type Definitions
 # ──────────────────────────────────────────────────────────────────────────────
@@ -128,7 +126,6 @@ with st.sidebar:
         "⚠️ **Privacy reminder:** ensure you are authorised to process any personal data you upload."
     )
 
-
 # ──────────────────────────────────────────────────────────────────────────────
 # Utility Functions
 # ──────────────────────────────────────────────────────────────────────────────
@@ -143,13 +140,16 @@ def _file_to_images(path: Path) -> List[Image.Image]:
         return [Image.open(path)]
     raise ValueError(f"Unsupported file type: {path}")
 
+
 def _pil_to_base64(img: Image.Image) -> str:
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return base64.b64encode(buf.getvalue()).decode()
 
+
 def file_to_base64_chunks(path: Path) -> List[str]:
     return [_pil_to_base64(im.convert("RGB")) for im in _file_to_images(path)]
+
 
 def render_fields_grid(container, title: str, data: dict, num_cols: int = 3):
     container.subheader(title)
@@ -179,23 +179,17 @@ def render_fields_grid(container, title: str, data: dict, num_cols: int = 3):
 # Model Invocation Functions with Langfuse Tracing
 # ──────────────────────────────────────────────────────────────────────────────
 
-@observe(as_type="generation", name="GPT-4.1-mini DL Extraction")
-def gpt4_1_mini_dl_from_images(b64_images: List[str]) -> dict:
+@observe(as_type="generation", name="GPT-4.1-mini Extraction")
+def model_dl_from_images(b64_images: List[str], model_name: str) -> dict:
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/png;base64,{b64}", "detail": "high"}
-                }
-                for b64 in b64_images
-            ],
-        },
+        {"role": "user", "content": [
+            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}", "detail": "high"}}
+            for b64 in b64_images
+        ]},
     ]
     resp = openai.chat.completions.create(
-        model="gpt-4.1-mini",
+        model=model_name,
         messages=messages,
         temperature=0.0,
         response_format={"type": "json_object"},
@@ -204,134 +198,72 @@ def gpt4_1_mini_dl_from_images(b64_images: List[str]) -> dict:
     )
     return json.loads(resp.choices[0].message.content)
 
-@observe(as_type="generation", name="GPT-4.1 DL Extraction")
-def gpt4_1_dl_from_images(b64_images: List[str]) -> dict:
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/png;base64,{b64}", "detail": "high"}
-                }
-                for b64 in b64_images
-            ],
-        },
-    ]
-    resp = openai.chat.completions.create(
-        model="gpt-4.1",
-        messages=messages,
-        temperature=0.0,
-        response_format={"type": "json_object"},
-        stream=False,
-        max_tokens=4096,
-    )
-    return json.loads(resp.choices[0].message.content)
+@observe(as_type="custom", name="AWS Textract Extraction")
+def textract_from_images(path: Path) -> dict:
+    # Only supported for Driver's License; returns empty for Insurance
+    results = {k: "" for k in FIELDS}
+    if document_type == "Driver's License":
+        FIELD_KEYWORDS = {
+            "license_number": ["license", "lic no", "dl number"],
+            "class": ["class"],
+            "first_name": ["first name", "given name"],
+            "middle_name": ["middle name"],
+            "last_name": ["last name", "surname"],
+            "address": ["address"],
+            "city": ["city"],
+            "state": ["state"],
+            "zip": ["zip", "postal code"],
+            "date_of_birth": ["date of birth", "dob"],
+            "issue_date": ["date of issue", "issue date"],
+            "expiration_date": ["expiration date", "exp date", "exp"],
+            "sex": ["sex", "gender"],
+            "eye_color": ["eye color", "eyes"],
+            "height": ["height"],
+            "organ_donor": ["organ donor"],
+        }
+        images = _file_to_images(path)
+        for img in images:
+            buf = io.BytesIO()
+            img.convert("RGB").save(buf, format="PNG")
+            resp = textract.analyze_document(Document={'Bytes': buf.getvalue()}, FeatureTypes=['FORMS'])
+            blocks = resp.get('Blocks', [])
 
-@observe(as_type="generation", name="Gemini 2.0 Flash DL Extraction")
-def gemini_dl_from_images(b64_images: List[str]) -> dict:
-    image_parts = [
-        types.Part.from_bytes(data=base64.b64decode(b64), mime_type="image/png")
-        for b64 in b64_images
-    ]
-    response = client.models.generate_content(
-        model="gemini-2.0-flash-lite-preview-02-05",
-        config=types.GenerateContentConfig(
-            system_instruction=SYSTEM_PROMPT,
-            response_mime_type="application/json",
-            temperature=0.0,
-            max_output_tokens=4096
-        ),
-        contents=image_parts
-    )
-    return json.loads(response.text)
+            block_map = {b['Id']: b for b in blocks}
+            key_map = {b['Id']: b for b in blocks if b['BlockType']=='KEY_VALUE_SET' and 'KEY' in b.get('EntityTypes', [])}
+            value_map = {b['Id']: b for b in blocks if b['BlockType']=='KEY_VALUE_SET' and 'VALUE' in b.get('EntityTypes', [])}
 
-@observe(as_type="generation", name="Gemini 2.5 Flash DL Extraction")
-def gemini_2_5_dl_from_images(b64_images: List[str]) -> dict:
-    image_parts = [
-        types.Part.from_bytes(data=base64.b64decode(b64), mime_type="image/png")
-        for b64 in b64_images
-    ]
-    response = client.models.generate_content(
-        model="gemini-2.5-flash-preview-05-20",
-        config=types.GenerateContentConfig(
-            system_instruction=SYSTEM_PROMPT,
-            response_mime_type="application/json",
-            temperature=0.0,
-            max_output_tokens=4096
-        ),
-        contents=image_parts
-    )
-    return json.loads(response.text)
+            def get_text(block):
+                text = ""
+                for rel in block.get('Relationships', []):
+                    if rel['Type']=='CHILD':
+                        for cid in rel['Ids']:
+                            word = block_map.get(cid)
+                            if word and word['BlockType']=='WORD':
+                                text += word['Text'] + ' '
+                return text.strip()
 
-@observe(as_type="custom", name="AWS Textract DL Extraction")
-def textract_dl_from_images(path: Path) -> dict:
-    FIELD_KEYWORDS = {
-        "license_number": ["license", "lic no", "dl number"],
-        "class": ["class"],
-        "first_name": ["first name", "given name"],
-        "middle_name": ["middle name"],
-        "last_name": ["last name", "surname"],
-        "address": ["address"],
-        "city": ["city"],
-        "state": ["state"],
-        "zip": ["zip", "postal code"],
-        "date_of_birth": ["date of birth", "dob"],
-        "issue_date": ["date of issue", "issue date"],
-        "expiration_date": ["expiration date", "exp date", "exp"],
-        "sex": ["sex", "gender"],
-        "eye_color": ["eye color", "eyes"],
-        "height": ["height"],
-        "organ_donor": ["organ donor"],
-    }
-    results = {k: "" for k in DL_FIELDS}
+            kvs: dict[str, str] = {}
+            for key_id, key_block in key_map.items():
+                key_text = get_text(key_block).lower()
+                val_text = ""
+                for rel in key_block.get('Relationships', []):
+                    if rel['Type']=='VALUE':
+                        for vid in rel['Ids']:
+                            val_block = value_map.get(vid)
+                            if val_block:
+                                val_text = get_text(val_block)
+                kvs[key_text] = val_text
 
-    images = _file_to_images(path)
-    for img in images:
-        buf = io.BytesIO()
-        img.convert("RGB").save(buf, format="PNG")
-        resp = textract.analyze_document(Document={'Bytes': buf.getvalue()}, FeatureTypes=['FORMS'])
-        blocks = resp.get('Blocks', [])
-
-        block_map = {b['Id']: b for b in blocks}
-        key_map = {b['Id']: b for b in blocks if b['BlockType']=='KEY_VALUE_SET' and 'KEY' in b.get('EntityTypes', [])}
-        value_map = {b['Id']: b for b in blocks if b['BlockType']=='KEY_VALUE_SET' and 'VALUE' in b.get('EntityTypes', [])}
-
-        def get_text(block):
-            text = ""
-            for rel in block.get('Relationships', []):
-                if rel['Type']=='CHILD':
-                    for cid in rel['Ids']:
-                        word = block_map.get(cid)
-                        if word and word['BlockType']=='WORD':
-                            text += word['Text'] + ' '
-            return text.strip()
-
-        kvs: dict[str, str] = {}
-        for key_id, key_block in key_map.items():
-            key_text = get_text(key_block).lower()
-            val_text = ""
-            for rel in key_block.get('Relationships', []):
-                if rel['Type']=='VALUE':
-                    for vid in rel['Ids']:
-                        val_block = value_map.get(vid)
-                        if val_block:
-                            val_text = get_text(val_block)
-            kvs[key_text] = val_text
-
-        for field, keywords in FIELD_KEYWORDS.items():
-            for key_text, val_text in kvs.items():
-                if any(keyword in key_text for keyword in keywords):
-                    results[field] = val_text
-                    break
-
+            for field, keywords in FIELD_KEYWORDS.items():
+                for key_text, val_text in kvs.items():
+                    if any(keyword in key_text for keyword in keywords):
+                        results[field] = val_text
+                        break
     return results
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Streamlit UI
+# Streamlit UI — File Upload & Extraction
 # ──────────────────────────────────────────────────────────────────────────────
-
 uploaded_file = st.file_uploader(
     f"Choose an image or PDF of a {document_type.lower()}",
     type=["pdf", "png", "jpg", "jpeg", "tiff", "tif"],
@@ -352,77 +284,48 @@ if uploaded_file and openai.api_key and gemini_key:
                 st.error(f"Error processing file: {e}")
                 st.stop()
 
-        with st.spinner("Extracting with GPT-4.1-mini …"):
-            try:
-                dl_openai_mini = gpt4_1_mini_dl_from_images(b64_chunks)
-            except Exception as e:
-                st.error(f"OpenAI API error (mini): {e}")
-                dl_openai_mini = {k: "" for k in DL_FIELDS}
-
-        with st.spinner("Extracting with GPT-4.1 …"):
-            try:
-                dl_gpt4_1 = gpt4_1_dl_from_images(b64_chunks)
-            except Exception as e:
-                st.error(f"OpenAI API error (full): {e}")
-                dl_gpt4_1 = {k: "" for k in DL_FIELDS}
-
-        with st.spinner("Extracting with Gemini 2.0 Flash …"):
-            try:
-                dl_gemini = gemini_dl_from_images(b64_chunks)
-            except Exception as e:
-                st.error(f"Gemini API error (2.0 Flash): {e}")
-                dl_gemini = {k: "" for k in DL_FIELDS}
-
-        with st.spinner("Extracting with Gemini 2.5 Flash …"):
-            try:
-                dl_gemini_2_5 = gemini_2_5_dl_from_images(b64_chunks)
-            except Exception as e:
-                st.error(f"Gemini API error (2.5 Flash): {e}")
-                dl_gemini_2_5 = {k: "" for k in DL_FIELDS}
-
-        with st.spinner("Extracting with AWS Textract …"):
-            try:
-                dl_textract = textract_dl_from_images(tmp_path)
-            except Exception as e:
-                st.error(f"AWS Textract error: {e}")
-                dl_textract = {k: "" for k in DL_FIELDS}
+        # Run LLM extractions
+        try:
+            dl_openai_mini = model_dl_from_images(b64_chunks, "gpt-4.1-mini")
+        except Exception:
+            dl_openai_mini = {k: "" for k in FIELDS}
+        try:
+            dl_gpt4_1 = model_dl_from_images(b64_chunks, "gpt-4.1")
+        except Exception:
+            dl_gpt4_1 = {k: "" for k in FIELDS}
+        try:
+            dl_gemini = client.models.generate_content(
+                model="gemini-2.5-flash",
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_PROMPT,
+                    response_mime_type="application/json",
+                    temperature=0.0,
+                    max_output_tokens=4096
+                ),
+                contents=[types.Part.from_bytes(data=base64.b64decode(b64), mime_type="image/png") for b64 in b64_chunks]
+            )
+            dl_gemini = json.loads(dl_gemini.text)
+        except Exception:
+            dl_gemini = {k: "" for k in FIELDS}
+        try:
+            dl_textract = textract_from_images(tmp_path)
+        except Exception:
+            dl_textract = {k: "" for k in FIELDS}
 
         st.success("Extraction complete!")
 
+        # Display results
         col_img, col_models = st.columns([1, 2], gap="large")
-
         with col_img:
             st.subheader("🖼️ Converted Image(s)")
             for idx, img in enumerate(images, start=1):
                 st.image(img, caption=f"Page {idx}", use_container_width=True)
 
         with col_models:
-            tabs = st.tabs([
-                "🤖 GPT-4.1-mini Fields",
-                "🤖 GPT-4.1 Fields",
-                "🤖 Gemini 2.0 Flash Fields",
-                "🤖 Gemini 2.5 Flash Fields",
-                "🧾 Textract Fields"
-            ])
-            for tab, title, data in zip(
-                tabs,
-                [
-                    "GPT-4.1-mini Fields",
-                    "GPT-4.1 Fields",
-                    "Gemini 2.0 Flash Fields",
-                    "Gemini 2.5 Flash Fields",
-                    "Textract Fields"
-                ],
-                [
-                    dl_openai_mini,
-                    dl_gpt4_1,
-                    dl_gemini,
-                    dl_gemini_2_5,
-                    dl_textract
-                ],
-            ):
+            tabs = st.tabs([f"{name} Fields" for name in ["GPT-4.1-mini", "GPT-4.1", "Gemini 2.5 Flash", "Textract"]])
+            for tab, data in zip(tabs, [dl_openai_mini, dl_gpt4_1, dl_gemini, dl_textract]):
                 with tab:
-                    render_fields_grid(tab, title, data)
+                    render_fields_grid(tab, f"{tab.title} Fields", data)
 
 elif uploaded_file:
     st.info("Please provide OpenAI, Gemini, and AWS credentials to proceed.")
