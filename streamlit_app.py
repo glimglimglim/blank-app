@@ -11,7 +11,8 @@ from pathlib import Path
 from typing import List
 
 import boto3
-import openai
+from langfuse.decorators import observe
+from langfuse.openai import openai  # Langfuse-wrapped OpenAI client
 import streamlit as st
 from PIL import Image
 
@@ -21,11 +22,21 @@ try:
 except ImportError:
     convert_from_path = None
 
-from google import genai
-from google.genai import types
+# ──────────────────────────────────────────────────────────────────────────────
+# Langfuse Configuration (via environment variables)
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Provided keys (you can also set via environment or Streamlit secrets)
+LANGFUSE_SECRET_KEY = "sk-lf-884f8f3a-6fcb-41a0-831a-018b355a03b4"
+LANGFUSE_PUBLIC_KEY = "pk-lf-9b6ba0a4-31cd-4347-ab73-17d0c35786b6"
+LANGFUSE_HOST = "https://langfuse.ai.wrs.dev"
+
+os.environ.setdefault("LANGFUSE_SECRET_KEY", LANGFUSE_SECRET_KEY)
+os.environ.setdefault("LANGFUSE_PUBLIC_KEY", LANGFUSE_PUBLIC_KEY)
+os.environ.setdefault("LANGFUSE_HOST", LANGFUSE_HOST)
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Configuration
+# Streamlit App Configuration
 # ──────────────────────────────────────────────────────────────────────────────
 
 st.set_page_config(page_title="Driver-License Extractor", layout="centered")
@@ -52,6 +63,7 @@ SYSTEM_PROMPT = (
 with st.sidebar:
     st.header("🔑 API Keys & Clients")
 
+    # OpenAI (Langfuse-wrapped)
     openai.api_key = os.getenv("OPENAI_API_KEY", st.secrets.get("OPENAI_API_KEY", ""))
     if not openai.api_key:
         k = st.text_input("OpenAI API key", type="password", placeholder="sk-...")
@@ -60,6 +72,7 @@ with st.sidebar:
     else:
         st.success("OpenAI key loaded.")
 
+    # Gemini
     gemini_key = os.getenv("GEMINI_API_KEY", st.secrets.get("GEMINI_API_KEY", ""))
     if not gemini_key:
         gemini_key = st.text_input(
@@ -69,16 +82,19 @@ with st.sidebar:
             help="Required for Gemini extraction"
         )
     if gemini_key:
+        from google import genai
+        from google.genai import types
         client = genai.Client(api_key=gemini_key)
         st.success("Gemini client initialized.")
 
+    # AWS Textract
     try:
         aws_cfg = st.secrets["aws"]
         textract = boto3.client(
             "textract",
             aws_access_key_id=aws_cfg["aws_access_key_id"],
             aws_secret_access_key=aws_cfg["aws_secret_access_key"],
-            aws_session_token=aws_cfg["aws_session_token"],
+            aws_session_token=aws_cfg.get("aws_session_token"),
             region_name=aws_cfg.get("region_name", "us-east-1"),
         )
         st.success("AWS Textract client initialized.")
@@ -137,9 +153,10 @@ def render_fields_grid(container, title: str, data: dict, num_cols: int = 3):
         """, unsafe_allow_html=True)
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Model Invocation Functions
+# Model Invocation Functions with Langfuse Tracing
 # ──────────────────────────────────────────────────────────────────────────────
 
+@observe(as_type="generation", name="GPT-4o-mini DL Extraction")
 def gpt4o_dl_from_images(b64_images: List[str]) -> dict:
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -164,6 +181,7 @@ def gpt4o_dl_from_images(b64_images: List[str]) -> dict:
     )
     return json.loads(resp.choices[0].message.content)
 
+@observe(as_type="generation", name="Gemini 2.0 Flash DL Extraction")
 def gemini_dl_from_images(b64_images: List[str]) -> dict:
     image_parts = [
         types.Part.from_bytes(data=base64.b64decode(b64), mime_type="image/png")
@@ -181,6 +199,7 @@ def gemini_dl_from_images(b64_images: List[str]) -> dict:
     )
     return json.loads(response.text)
 
+@observe(as_type="custom", name="AWS Textract DL Extraction")
 def textract_dl_from_images(path: Path) -> dict:
     FIELD_KEYWORDS = {
         "license_number": ["license", "lic no", "dl number"],
